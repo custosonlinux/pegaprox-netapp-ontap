@@ -23,6 +23,7 @@ from ..core.ontap_client import OntapError
 from ..core.san_helpers import (
     get_iscsi_initiator_iqn, find_device_by_serial, _iscsi_serial_to_mapper,
     get_nvme_host_nqn, nvme_connect_all, nvme_disconnect_by_vg,
+    nvme_disconnect_by_subsystem_name,
     nvme_list_devices, find_new_nvme_device,
     snapmanifest_initialize,
 )
@@ -120,7 +121,7 @@ def _prov_datastores():
 
 def _check_vms_on_storage(db, pve_host_id, vg_name):
     """Returns list of LV names in vg_name that look like VM disks (excludes system LVs)."""
-    SYSTEM_LVS = {"snapmanifest", "data", "data_tmeta", "data_tdata"}
+    SYSTEM_LVS = {"netapp_snapmanifest", "data", "data_tmeta", "data_tdata"}
     try:
         pve = build_pve_client(db, pve_host_id)
         su, sp, sk = get_ssh_creds(pve)
@@ -1629,6 +1630,7 @@ def _remove_nvme(ds_id, ds, delete_ontap, db, jlog):
     ns_uuid        = ds.get("ns_uuid", "")
     volume_uuid    = ds.get("volume_uuid", "")
     subsystem_uuid = ds.get("subsystem_uuid", "")
+    subsystem_name = ds.get("subsystem_name", "")
 
     endpoint = get_endpoint(db, endpoint_id)
     client   = build_ontap_client(endpoint)
@@ -1656,9 +1658,11 @@ def _remove_nvme(ds_id, ds, delete_ontap, db, jlog):
                         key_material=sk, timeout=30)
                 jlog.log(f"[{sh}] VG deactivated.")
 
-            # Disconnect while VG is still registered so pvs can find the device
+            # Disconnect while VG is still registered so pvs can find the device.
+            # If the VG doesn't exist, fall back to disconnect-by-subsystem-NQN.
             jlog.log(f"[{sh}] Disconnecting NVMe controller …")
             nvme_disconnect_by_vg(sh, su, sp, sk, vg_name)
+            nvme_disconnect_by_subsystem_name(sh, su, sp, sk, subsystem_name)
             jlog.log(f"[{sh}] NVMe disconnected.")
 
             if vg_name:

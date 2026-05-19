@@ -667,6 +667,32 @@ def nvme_disconnect_by_vg(ssh_host, ssh_user, ssh_pass, ssh_key, vg_name):
         log.warning(f"[netapp_storage] nvme_disconnect_by_vg {ssh_host}: {exc}")
 
 
+def nvme_disconnect_by_subsystem_name(ssh_host, ssh_user, ssh_pass, ssh_key, subsystem_name):
+    """Fallback disconnect: finds the NQN for subsystem_name in nvme list-subsys and disconnects it.
+
+    Used when nvme_disconnect_by_vg finds no VG (VG never created or already removed).
+    """
+    if not subsystem_name:
+        return
+    try:
+        import re as _re
+        out = ssh_run(ssh_host, ssh_user, ssh_pass,
+                      "nvme list-subsys 2>/dev/null",
+                      capture=True, key_material=ssh_key, timeout=15)
+        for line in out.splitlines():
+            m = _re.search(r'NQN=([\S]+)', line)
+            if m:
+                nqn = m.group(1)
+                if f":subsystem.{subsystem_name}" in nqn:
+                    ssh_run(ssh_host, ssh_user, ssh_pass,
+                            f"timeout 10 nvme disconnect -n {shlex.quote(nqn)} 2>/dev/null; true",
+                            key_material=ssh_key, timeout=20)
+                    log.info(f"[netapp_storage] nvme disconnect subsystem '{subsystem_name}' on {ssh_host}")
+                    return
+    except Exception as exc:
+        log.warning(f"[netapp_storage] nvme_disconnect_by_subsystem_name {ssh_host}: {exc}")
+
+
 def vg_rescan_and_activate(ssh_host, ssh_user, ssh_pass, ssh_key, vg_name):
     """Rescans PVs and activates the VG (after volume revert on ONTAP).
 
