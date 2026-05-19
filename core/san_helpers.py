@@ -608,6 +608,48 @@ def find_new_nvme_device(ssh_host, ssh_user, ssh_pass, ssh_key,
     raise RuntimeError(f"New NVMe namespace device not found after {timeout_s}s")
 
 
+def find_nvme_device_for_subsystem_nqn(ssh_host, ssh_user, ssh_pass, ssh_key,
+                                        subsystem_nqn, timeout_s=60):
+    """Finds the /dev/nvme*n* device for a specific subsystem NQN.
+
+    Parses nvme list-subsys to find connected controllers, then returns the
+    first namespace device (/dev/nvme<N>n1). Works even if the device was
+    already present before provisioning started — no baseline diff needed.
+    """
+    import re as _re
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            out = ssh_run(ssh_host, ssh_user, ssh_pass,
+                          "nvme list-subsys 2>/dev/null",
+                          capture=True, key_material=ssh_key, timeout=15)
+            in_subsys = False
+            controllers = []
+            for line in out.splitlines():
+                if subsystem_nqn in line:
+                    in_subsys = True
+                    continue
+                if in_subsys:
+                    m = _re.search(r'\+- (nvme\d+)\s', line)
+                    if m:
+                        controllers.append(m.group(1))
+                    elif line.strip() and not line.strip().startswith('+') and not line.strip().startswith('\\'):
+                        break  # next subsystem block
+            for ctrl in controllers:
+                dev_out = ssh_run(ssh_host, ssh_user, ssh_pass,
+                                  f"ls /dev/{ctrl}n* 2>/dev/null | grep -v p | head -1",
+                                  capture=True, key_material=ssh_key, timeout=10)
+                dev = dev_out.strip()
+                if dev and dev.startswith("/dev/"):
+                    log.info(f"[netapp_storage] NVMe device for subsystem: {dev}")
+                    return dev
+        except Exception:
+            pass
+        nvme_ns_rescan(ssh_host, ssh_user, ssh_pass, ssh_key)
+        time.sleep(3)
+    raise RuntimeError(f"NVMe namespace device not found after {timeout_s}s")
+
+
 def get_nvme_host_nqn(ssh_host, ssh_user, ssh_pass, ssh_key):
     """Returns the host NQN from /etc/nvme/hostnqn, or empty string."""
     try:
@@ -636,6 +678,25 @@ def nvme_connect_all(ssh_host, ssh_user, ssh_pass, ssh_key, timeout_s=60):
     ssh_run(ssh_host, ssh_user, ssh_pass,
             f"timeout {inner} nvme connect-all 2>/dev/null; sleep 2; true",
             key_material=ssh_key, timeout=timeout_s)
+    nvme_ns_rescan(ssh_host, ssh_user, ssh_pass, ssh_key)
+
+
+def nvme_connect_to_subsystem(ssh_host, ssh_user, ssh_pass, ssh_key,
+                               lif_ips, subsystem_nqn, timeout_s=15):
+    """Connects to a specific NVMe subsystem on each LIF via explicit nvme connect.
+
+    Unlike nvme connect-all (which reads discovery.conf and requires a DDC on
+    port 8009), this issues one nvme connect per LIF directly to the data port
+    (4420). Synchronous, DDC-free, and deterministic.
+    """
+    for lif_ip in lif_ips:
+        try:
+            cmd = (f"nvme connect -t tcp -a {shlex.quote(lif_ip)} -s 4420 "
+                   f"-n {shlex.quote(subsystem_nqn)} 2>/dev/null; true")
+            ssh_run(ssh_host, ssh_user, ssh_pass, cmd,
+                    key_material=ssh_key, timeout=timeout_s)
+        except Exception as exc:
+            log.warning(f"[netapp_storage] nvme connect {lif_ip} → {subsystem_nqn[:40]}…: {exc}")
     nvme_ns_rescan(ssh_host, ssh_user, ssh_pass, ssh_key)
 
 

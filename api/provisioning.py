@@ -22,9 +22,9 @@ from ..core._helpers import (
 from ..core.ontap_client import OntapError
 from ..core.san_helpers import (
     get_iscsi_initiator_iqn, find_device_by_serial, _iscsi_serial_to_mapper,
-    get_nvme_host_nqn, nvme_connect_all, nvme_disconnect_by_vg,
-    nvme_disconnect_by_subsystem_name,
-    nvme_list_devices, find_new_nvme_device,
+    get_nvme_host_nqn, nvme_connect_all, nvme_connect_to_subsystem,
+    nvme_disconnect_by_vg, nvme_disconnect_by_subsystem_name,
+    nvme_list_devices, find_new_nvme_device, find_nvme_device_for_subsystem_nqn,
     snapmanifest_initialize,
 )
 
@@ -1470,9 +1470,20 @@ def _provision_nvme(ds_id, params, db, jlog):
         (volume_uuid, volume_name, ns_uuid, subsystem_uuid, subsystem_name, _now(), ds_id),
     )
 
-    # ── Get NVMe/TCP LIF IPs ──────────────────────────────────────────────────
+    # ── Get NVMe/TCP LIF IPs and subsystem NQN ───────────────────────────────
     lif_ips = client.get_nvme_lifs_for_svm(svm_name)
     jlog.log(f"NVMe/TCP LIFs: {lif_ips}")
+
+    subsystem_nqn = ""
+    try:
+        sub_info = client.get_nvme_subsystem(subsystem_uuid)
+        subsystem_nqn = sub_info.get("target_nqn", "")
+    except Exception:
+        pass
+    if subsystem_nqn:
+        jlog.log(f"Subsystem NQN: {subsystem_nqn}")
+    else:
+        jlog.log("WARNING: could not retrieve subsystem NQN — falling back to connect-all")
 
     # ── Per host: connect → wait for device ───────────────────────────────────
     ordered_hosts = [hid for hid in pve_host_ids if hid in host_meta]
@@ -1483,11 +1494,18 @@ def _provision_nvme(ds_id, params, db, jlog):
         jlog.log(f"[{sh}] Capturing NVMe device baseline …")
         devices_before = nvme_list_devices(sh, su, sp, sk)
 
-        jlog.log(f"[{sh}] Connecting NVMe (connect-all) …")
-        nvme_connect_all(sh, su, sp, sk)
+        if subsystem_nqn and lif_ips:
+            jlog.log(f"[{sh}] Connecting NVMe (direct per-LIF) …")
+            nvme_connect_to_subsystem(sh, su, sp, sk, lif_ips, subsystem_nqn)
+        else:
+            jlog.log(f"[{sh}] Connecting NVMe (connect-all fallback) …")
+            nvme_connect_all(sh, su, sp, sk)
 
-        jlog.log(f"[{sh}] Waiting for new NVMe namespace device …")
-        device = find_new_nvme_device(sh, su, sp, sk, devices_before, timeout_s=60)
+        jlog.log(f"[{sh}] Waiting for NVMe namespace device …")
+        if subsystem_nqn:
+            device = find_nvme_device_for_subsystem_nqn(sh, su, sp, sk, subsystem_nqn, timeout_s=90)
+        else:
+            device = find_new_nvme_device(sh, su, sp, sk, devices_before, timeout_s=90)
         jlog.log(f"[{sh}] Device ready: {device}")
 
         if i == 0:
