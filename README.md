@@ -97,7 +97,7 @@ systemctl restart pegaprox
 
 In the PegaProx UI: **Settings → Plugins → NetApp Storage → Enable**.
 
-The plugin initializes its own SQLite database on first load (`/var/lib/pegaprox/plugins/netapp_storage/db/netapp_storage.db`).
+The plugin adds its tables to the central PegaProx database on first load (`/opt/PegaProx/config/pegaprox.db`).
 
 ---
 
@@ -112,13 +112,13 @@ The plugin initializes its own SQLite database on first load (`/var/lib/pegaprox
 | Manifest rides inside ONTAP snapshot | ✅ | 🟡 Beta | 🟡 Beta |
 | Restore — SFSR (Single-File, NFS only) | ✅ | ❌ n/a | ❌ n/a |
 | Restore — Single VM (LV-copy via temp clone) | ❌ n/a | 🟡 Beta | 🟡 Beta¹ |
-| Restore — Volume Revert (all VMs) | ❌ n/a | 🟡 Beta | 🟡 Beta |
+| Restore — Volume Revert (all VMs) | ✅ | 🟡 Beta | 🟡 Beta |
 | VM Clone from snapshot | ✅ | 🟡 Beta | 🟡 Beta¹ |
 | Clone from ONTAP-native snapshots | ✅ | 🟡 Beta | 🟡 Beta |
 | Multi-VM snapshot | ✅ | 🟡 Beta | 🟡 Beta |
 | ONTAP-native snapshot visibility | ✅ | 🟡 Beta | 🟡 Beta |
 | SnapMirror® visibility & DR restore/clone | ✅ | 🔄 Planned | 🔄 Planned |
-| Storage Provisioning (auto-setup) | ❌ n/a | 🟡 Beta | 🟡 Beta |
+| Storage Provisioning (auto-setup) | ✅ | 🟡 Beta | 🟡 Beta |
 | Job cancellation | ✅ | 🟡 Beta | 🟡 Beta |
 
 Legend: ✅ Stable · 🟡 Beta · 🔄 Planned · ❌ Not applicable
