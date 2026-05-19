@@ -629,12 +629,13 @@ def find_nvme_device_for_subsystem_nqn(ssh_host, ssh_user, ssh_pass, ssh_key,
                 if subsystem_nqn in line:
                     in_subsys = True
                     continue
-                if in_subsys:
-                    m = _re.search(r'\+- (nvme\d+)\s', line)
-                    if m:
-                        controllers.append(m.group(1))
-                    elif line.strip() and not line.strip().startswith('+') and not line.strip().startswith('\\'):
-                        break  # next subsystem block
+                if not in_subsys:
+                    continue
+                if line.strip().startswith('nvme-subsys'):
+                    break  # next subsystem started
+                m = _re.search(r'\+- (nvme\d+)', line)
+                if m:
+                    controllers.append(m.group(1))
             for ctrl in controllers:
                 dev_out = ssh_run(ssh_host, ssh_user, ssh_pass,
                                   f"ls /dev/{ctrl}n* 2>/dev/null | grep -v p | head -1",
