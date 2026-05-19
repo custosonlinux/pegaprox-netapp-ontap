@@ -35,6 +35,12 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _ontap_safe_name(name: str) -> str:
+    """Replace characters not allowed in ONTAP volume/subsystem names with underscores."""
+    import re
+    return re.sub(r'[^a-zA-Z0-9_]', '_', name)
+
+
 from ..core._helpers import PLUGIN_ID  # noqa: F401
 
 
@@ -507,7 +513,7 @@ def _provision_iscsi(ds_id, params, db, jlog):
 
     # ── ONTAP: Volume ────────────────────────────────────────────────────────
     volume_uuid = params.get("volume_uuid", "")
-    volume_name = params.get("volume_name", "")
+    volume_name = _ontap_safe_name(params.get("volume_name", ""))
 
     asa_mode = False
     if not volume_uuid:
@@ -1372,7 +1378,7 @@ def _provision_nvme(ds_id, params, db, jlog):
 
     # ── ONTAP: Volume ────────────────────────────────────────────────────────
     volume_uuid = params.get("volume_uuid", "")
-    volume_name = params.get("volume_name", "")
+    volume_name = _ontap_safe_name(params.get("volume_name", ""))
     asa_mode = False
     if not volume_uuid:
         ag_info = f" on aggregate '{aggregate_name}'" if aggregate_name else " (auto-placement)"
@@ -1949,7 +1955,7 @@ def _provision_nfs(ds_id, params, db, jlog):
     size_bytes     = int(params.get("size_bytes", 0))
     aggregate_name = params.get("aggregate_name", "") or None
     junction_path  = params.get("nfs_junction_path", "") or f"/{name.replace(' ', '-').lower()}"
-    volume_name    = params.get("volume_name", "")
+    volume_name    = _ontap_safe_name(params.get("volume_name", ""))
     nfs_lif_ip_sel = params.get("nfs_lif_ip", "").strip()   # user-selected LIF IP
 
     endpoint = get_endpoint(db, endpoint_id)
