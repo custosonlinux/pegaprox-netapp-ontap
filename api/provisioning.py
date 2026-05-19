@@ -1181,8 +1181,10 @@ def _remove_iscsi(ds_id, ds, delete_ontap, db, jlog):
             jlog.log(f"WARNING: could not fetch LUN serial: {exc}")
 
     # ── Per-host teardown ─────────────────────────────────────────────────────
-    # Order matters: PVE storage config → VG deactivate → multipath flush → iSCSI logout
-    # vgchange -an must complete before flushing multipath (dm device still holds the LUN open)
+    # Correct order: pvesm → VG deactivate/remove → iSCSI logout → multipath flush
+    # Multipath flush must come AFTER iSCSI logout; flushing while sessions are up
+    # causes multipathd to immediately recreate the DM device, leaving a zombie
+    # with queue_if_no_path that hangs subsequent pvs/vgs calls on the host.
     for hid in pve_host_ids:
         try:
             pve = build_pve_client(db, hid)
@@ -1215,13 +1217,7 @@ def _remove_iscsi(ds_id, ds, delete_ontap, db, jlog):
                 except Exception as exc:
                     jlog.log(f"[{sh}] WARNING: VG teardown: {exc}")
 
-            # 3. Flush multipath device + remove sdX paths (same as iSCSI clone teardown)
-            if lun_serial:
-                jlog.log(f"[{sh}] Flushing multipath device …")
-                flush_iscsi_clone_device(sh, su, sp, sk, lun_serial)
-                jlog.log(f"[{sh}] Multipath flushed.")
-
-            # 4. iSCSI logout + delete persistent node entry
+            # 3. iSCSI logout + delete persistent node entry (must precede multipath flush)
             if target_iqn:
                 iqn_q = shlex.quote(target_iqn)
                 jlog.log(f"[{sh}] iSCSI logout …")
@@ -1234,6 +1230,12 @@ def _remove_iscsi(ds_id, ds, delete_ontap, db, jlog):
                     jlog.log(f"[{sh}] iSCSI logged out.")
                 except Exception as exc:
                     jlog.log(f"[{sh}] WARNING: iSCSI logout: {exc}")
+
+            # 4. Flush multipath device + remove sdX paths (sessions are gone at this point)
+            if lun_serial:
+                jlog.log(f"[{sh}] Flushing multipath device …")
+                flush_iscsi_clone_device(sh, su, sp, sk, lun_serial)
+                jlog.log(f"[{sh}] Multipath flushed.")
 
         except Exception as exc:
             jlog.log(f"WARNING: cannot reach host {hid}: {exc}")
