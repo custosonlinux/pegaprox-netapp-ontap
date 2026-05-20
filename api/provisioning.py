@@ -812,9 +812,11 @@ def _run_resize(job_id, ds_id, new_size_bytes, username):
         client   = build_ontap_client(endpoint)
         vol_uuid = ds.get("volume_uuid", "")
 
-        # SAN volumes need a small overhead so ONTAP can fit the LUN/namespace
-        # inside the volume.  64 MiB is enough for thin-provisioned flexvols.
-        _SAN_VOL_SIZE = new_size_bytes + 64 * 1024 * 1024
+        # The ONTAP volume must be larger than the LUN/namespace to leave room
+        # for metadata, overwrite reserve, and WAFL overhead.  10 % overhead
+        # is sufficient; on thin-provisioned volumes this costs no physical
+        # space.
+        _SAN_VOL_SIZE = int(new_size_bytes * 1.10)
 
         if protocol == "nfs":
             # NFS: only ONTAP resize needed (PVE mounts adjust automatically)
