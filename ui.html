@@ -2668,7 +2668,7 @@ async function deleteSelectedSnapshots() {
     var cb = checked[i];
     try {
       if (cb.dataset.native === '1') {
-        await apiPost('snapshots/delete', {native:true, ontap_snap_uuid:cb.dataset.uuid, mapping_id:cb.dataset.mid});
+        await apiPost('snapshots/delete', {native:true, ontap_snap_uuid:cb.dataset.uuid, mapping_id:cb.dataset.mid, snap_name:cb.dataset.name});
       } else {
         await apiPost('snapshots/delete', {id:cb.dataset.id});
       }
