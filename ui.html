@@ -287,30 +287,42 @@
 <body>
 
 <script>
-/* Apply PegaProx theme via URL param ?theme=dark|corp-dark|corp-light */
+/* Apply PegaProx theme via URL param ?theme=<pegaprox-theme-key> */
 (function() {
+  // Maps PegaProx theme keys → plugin CSS variables.
+  // dark=--bg, card=--card, border=--border, hover=--hover, primary=--primary,
+  // text=--text, textMuted=--muted, success/warning/error/info unchanged.
+  function t(c) {
+    return {'--bg':c.dark,'--card':c.card,'--border':c.border,'--hover':c.hover,
+            '--primary':c.primary,'--text':c.text,'--muted':c.textMuted,
+            '--success':c.success,'--warning':c.warning,'--error':c.error,'--info':c.info};
+  }
   var themes = {
-    'dark': {
-      '--bg':'#0F1419','--card':'#161B22','--border':'#30363D',
-      '--hover':'#1C2128','--primary':'#E57000','--text':'#E6EDF3',
-      '--muted':'#8B949E','--success':'#3FB950','--warning':'#D29922',
-      '--error':'#F85149','--info':'#58A6FF',
-    },
-    'corp-dark': {
-      '--bg':'#1b2a32','--card':'#243542','--border':'#344955',
-      '--hover':'#29414e','--primary':'#49afd9','--text':'#e9ecef',
-      '--muted':'#728b9a','--success':'#60b515','--warning':'#efc006',
-      '--error':'#f54f47','--info':'#49afd9',
-    },
-    'corp-light': {
-      '--bg':'#f0f2f5','--card':'#ffffff','--border':'#cfd8dc',
-      '--hover':'#e8f0f4','--primary':'#0072a3','--text':'#333333',
-      '--muted':'#888888','--success':'#60b515','--warning':'#d46b08',
-      '--error':'#f54f47','--info':'#0072a3',
-    },
+    'proxmoxDark': t({primary:'#E57000',dark:'#0F1419',card:'#161B22',border:'#30363D',hover:'#1C2128',text:'#FFFFFF',textMuted:'#8B949E',success:'#3FB950',warning:'#D29922',error:'#F85149',info:'#58A6FF'}),
+    'midnight':    t({primary:'#6366F1',dark:'#0F172A',card:'#1E293B',border:'#334155',hover:'#1E3A5F',text:'#F1F5F9',textMuted:'#94A3B8',success:'#22C55E',warning:'#EAB308',error:'#EF4444',info:'#3B82F6'}),
+    'forest':      t({primary:'#10B981',dark:'#0D1117',card:'#161B22',border:'#21262D',hover:'#1C2128',text:'#C9D1D9',textMuted:'#8B949E',success:'#3FB950',warning:'#D29922',error:'#F85149',info:'#58A6FF'}),
+    'rose':        t({primary:'#F43F5E',dark:'#18181B',card:'#27272A',border:'#3F3F46',hover:'#2D2D33',text:'#FAFAFA',textMuted:'#A1A1AA',success:'#22C55E',warning:'#EAB308',error:'#EF4444',info:'#3B82F6'}),
+    'ocean':       t({primary:'#0EA5E9',dark:'#0C1222',card:'#132337',border:'#1E3A5F',hover:'#1A3550',text:'#E2E8F0',textMuted:'#94A3B8',success:'#22C55E',warning:'#F59E0B',error:'#EF4444',info:'#3B82F6'}),
+    'highContrast':t({primary:'#FFD700',dark:'#000000',card:'#0A0A0A',border:'#FFFFFF',hover:'#1A1A1A',text:'#FFFFFF',textMuted:'#CCCCCC',success:'#00FF00',warning:'#FFFF00',error:'#FF0000',info:'#00FFFF'}),
+    'dracula':     t({primary:'#BD93F9',dark:'#282A36',card:'#343746',border:'#44475A',hover:'#3D4051',text:'#F8F8F2',textMuted:'#6272A4',success:'#50FA7B',warning:'#F1FA8C',error:'#FF5555',info:'#8BE9FD'}),
+    'nord':        t({primary:'#88C0D0',dark:'#2E3440',card:'#3B4252',border:'#4C566A',hover:'#434C5E',text:'#ECEFF4',textMuted:'#D8DEE9',success:'#A3BE8C',warning:'#EBCB8B',error:'#BF616A',info:'#81A1C1'}),
+    'monokai':     t({primary:'#F92672',dark:'#272822',card:'#3E3D32',border:'#49483E',hover:'#3E3D32',text:'#F8F8F2',textMuted:'#75715E',success:'#A6E22E',warning:'#E6DB74',error:'#F92672',info:'#66D9EF'}),
+    'matrix':      t({primary:'#00FF41',dark:'#0D0208',card:'#0D0D0D',border:'#003B00',hover:'#001A00',text:'#00FF41',textMuted:'#008F11',success:'#00FF41',warning:'#ADFF2F',error:'#FF0000',info:'#39FF14'}),
+    'sunset':      t({primary:'#FF6B35',dark:'#1A1423',card:'#2D2137',border:'#4A3B5C',hover:'#3D2F4A',text:'#FFF4E6',textMuted:'#B8A9C9',success:'#7CB518',warning:'#FFB627',error:'#E63946',info:'#A855F7'}),
+    'cyberpunk':   t({primary:'#00D9FF',dark:'#0A0A0F',card:'#12121A',border:'#FF00FF',hover:'#1A1A25',text:'#FFFFFF',textMuted:'#8888AA',success:'#00FF9F',warning:'#FFFF00',error:'#FF0055',info:'#00D9FF'}),
+    'github':      t({primary:'#238636',dark:'#0D1117',card:'#161B22',border:'#30363D',hover:'#1F2428',text:'#C9D1D9',textMuted:'#8B949E',success:'#238636',warning:'#D29922',error:'#F85149',info:'#58A6FF'}),
+    'solarizedDark':t({primary:'#B58900',dark:'#002B36',card:'#073642',border:'#586E75',hover:'#094552',text:'#FDF6E3',textMuted:'#93A1A1',success:'#859900',warning:'#B58900',error:'#DC322F',info:'#268BD2'}),
+    'gruvbox':     t({primary:'#FE8019',dark:'#1D2021',card:'#282828',border:'#3C3836',hover:'#32302F',text:'#EBDBB2',textMuted:'#A89984',success:'#B8BB26',warning:'#FABD2F',error:'#FB4934',info:'#83A598'}),
+    'corporateDark':t({primary:'#49afd9',dark:'#1b2a32',card:'#243542',border:'#344955',hover:'#29414e',text:'#e9ecef',textMuted:'#728b9a',success:'#60b515',warning:'#efc006',error:'#f54f47',info:'#49afd9'}),
+    'corporateLight':t({primary:'#0079b8',dark:'#fafafa',card:'#ffffff',border:'#cccccc',hover:'#eeeeee',text:'#313131',textMuted:'#666666',success:'#60b515',warning:'#efc006',error:'#f54f47',info:'#0079b8'}),
+    'enterpriseBlue':t({primary:'#005EB8',dark:'#2C3E50',card:'#34495E',border:'#4A6278',hover:'#3D5266',text:'#ECF0F1',textMuted:'#95A5A6',success:'#27AE60',warning:'#F39C12',error:'#E74C3C',info:'#3498DB'}),
+    // legacy aliases kept for backwards-compat
+    'dark':        t({primary:'#E57000',dark:'#0F1419',card:'#161B22',border:'#30363D',hover:'#1C2128',text:'#E6EDF3',textMuted:'#8B949E',success:'#3FB950',warning:'#D29922',error:'#F85149',info:'#58A6FF'}),
+    'corp-dark':   t({primary:'#49afd9',dark:'#1b2a32',card:'#243542',border:'#344955',hover:'#29414e',text:'#e9ecef',textMuted:'#728b9a',success:'#60b515',warning:'#efc006',error:'#f54f47',info:'#49afd9'}),
+    'corp-light':  t({primary:'#0072a3',dark:'#f0f2f5',card:'#ffffff',border:'#cfd8dc',hover:'#e8f0f4',text:'#333333',textMuted:'#888888',success:'#60b515',warning:'#d46b08',error:'#f54f47',info:'#0072a3'}),
   };
-  var theme = new URLSearchParams(window.location.search).get('theme') || 'dark';
-  var vars = themes[theme] || themes['dark'];
+  var theme = new URLSearchParams(window.location.search).get('theme') || 'proxmoxDark';
+  var vars = themes[theme] || themes['proxmoxDark'];
   var r = document.documentElement.style;
   Object.keys(vars).forEach(function(k) { r.setProperty(k, vars[k]); });
 })();
