@@ -127,6 +127,7 @@ The plugin adds its tables to the central PegaProx database on first load (`/opt
 | ONTAP-native snapshot visibility | ✅ | 🟡 Beta | 🟡 Beta |
 | SnapMirror® visibility & DR restore/clone | ✅ | 🔄 Planned | 🔄 Planned |
 | Storage Provisioning (auto-setup) | ✅ | 🟡 Beta | 🟡 Beta |
+| Storage Resize | ✅ | 🟡 Beta | 🟡 Beta |
 | Job cancellation | ✅ | 🟡 Beta | 🟡 Beta |
 
 Legend: ✅ Stable · 🟡 Beta · 🟠 Alpha · 🔵 In Development · 🔄 Planned · ❌ N/A

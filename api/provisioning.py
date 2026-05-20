@@ -858,7 +858,9 @@ def _run_resize(job_id, ds_id, new_size_bytes, username):
                         mapper = _iscsi_serial_to_mapper(lun_serial)
                         jlog.log(f"[{sh}] Resizing PV {mapper} …")
                         ssh_run(sh, su, sp,
-                                f"pvresize {shlex.quote(mapper)} 2>/dev/null; true",
+                                f"multipathd resize map $(basename {shlex.quote(mapper)}) 2>/dev/null; "
+                                f"pvresize {shlex.quote(mapper)} 2>/dev/null; "
+                                f"pvscan --cache 2>/dev/null; true",
                                 key_material=sk, timeout=30)
                         jlog.log(f"[{sh}] PV resized.")
                 except Exception as exc:
@@ -890,7 +892,8 @@ def _run_resize(job_id, ds_id, new_size_bytes, username):
                         for pv in (l.strip() for l in out.splitlines() if l.strip()):
                             jlog.log(f"[{sh}] Resizing PV {pv} …")
                             ssh_run(sh, su, sp,
-                                    f"pvresize {shlex.quote(pv)} 2>/dev/null; true",
+                                    f"pvresize {shlex.quote(pv)} 2>/dev/null; "
+                                    f"pvscan --cache 2>/dev/null; true",
                                     key_material=sk, timeout=30)
                         jlog.log(f"[{sh}] PV resized.")
                 except Exception as exc:
