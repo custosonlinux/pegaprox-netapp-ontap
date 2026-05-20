@@ -1726,14 +1726,16 @@ class OntapClient:
     def resize_namespace(self, ns_uuid, new_size_bytes):
         """Grows an NVMe namespace to new_size_bytes."""
         last_err = None
-        # Try REST endpoints in order (storage/storage-units is the ASA R2 native API)
-        for path in (f"protocols/nvme/namespaces/{ns_uuid}",
-                     f"storage/namespaces/{ns_uuid}",
-                     f"storage/storage-units/{ns_uuid}"):
+        # (path, body) — storage/storage-units uses top-level "size" (ASA R2 native)
+        candidates = [
+            (f"protocols/nvme/namespaces/{ns_uuid}", {"space": {"size": new_size_bytes}}),
+            (f"storage/namespaces/{ns_uuid}",        {"space": {"size": new_size_bytes}}),
+            (f"storage/storage-units/{ns_uuid}",     {"size": new_size_bytes}),
+        ]
+        for path, body in candidates:
             url = f"{self.base_url}/{path}"
             try:
-                r = self._session.patch(url,
-                                        json={"space": {"size": new_size_bytes}},
+                r = self._session.patch(url, json=body,
                                         params={"return_timeout": 30}, timeout=self.timeout)
             except Exception as exc:
                 raise OntapError(f"PATCH {path} network error: {exc}")

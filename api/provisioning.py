@@ -867,15 +867,21 @@ def _run_resize(job_id, ds_id, new_size_bytes, username):
             vg_name  = ds.get("vg_name", "")
             pve_host_ids = json.loads(ds.get("pve_host_ids") or "[]")
 
-            jlog.log("Resizing ONTAP volume …")
-            client.resize_volume(vol_uuid, _SAN_VOL_SIZE)
+            # On ASA R2, volumes are thin metadata wrappers — resize the
+            # namespace/storage-unit directly (resize_namespace handles the
+            # fallback chain).  On FAS/AFF, grow the volume first to make
+            # room, then grow the namespace.
             try:
                 vol_info = client.get_volume(vol_uuid)
-                actual_vol = (vol_info.get("space") or {}).get("size", 0)
-                jlog.log(f"Volume actual size after resize: {actual_vol} bytes "
-                         f"(target was {_SAN_VOL_SIZE})")
-            except Exception as _ve:
-                jlog.log(f"NOTE: could not verify volume size: {_ve}")
+                vol_size = (vol_info.get("space") or {}).get("size", 0)
+            except Exception:
+                vol_size = 0
+            if vol_size > 0:
+                jlog.log("Resizing ONTAP volume …")
+                client.resize_volume(vol_uuid, _SAN_VOL_SIZE)
+                jlog.log("Volume resized.")
+            else:
+                jlog.log("ASA R2 detected (volume has no tracked size) — skipping volume resize.")
             jlog.log("Resizing NVMe namespace …")
             client.resize_namespace(ns_uuid, new_size_bytes)
             jlog.log("ONTAP objects resized.")
