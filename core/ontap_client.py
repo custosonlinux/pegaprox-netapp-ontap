@@ -254,19 +254,49 @@ class OntapClient:
     def get_snapshot(self, volume_uuid, snap_uuid):
         return self._get(f"storage/volumes/{volume_uuid}/snapshots/{snap_uuid}")
 
-    def delete_snapshot(self, volume_uuid, snap_uuid, force=False):
+    def delete_snapshot(self, volume_uuid, snap_uuid, force=False, snap_name=""):
         """Deletes a snapshot. Returns job UUID.
 
         force=True: pass ?force=true to ONTAP (removes snapshot even if it has dependents
-        such as automatic policy snapshots). Does NOT break SnapMirror relationships —
-        only bypasses the "snapshot is busy" guard for non-SM-locked snapshots.
+        such as automatic policy snapshots). Does NOT break SnapMirror relationships.
+
+        snap_name: snapshot name (used for ASA CLI-bridge fallback when snap_uuid alone
+        is insufficient). If omitted, falls back to snap_uuid as the name.
+
+        ASA fallback: code 1638644 → CLI bridge DELETE private/cli/snapshot.
         """
         params = {"return_timeout": 0}
         if force:
             params["force"] = "true"
-        resp = self._delete(f"storage/volumes/{volume_uuid}/snapshots/{snap_uuid}",
-                            params=params)
-        return resp.get("job", {}).get("uuid", "")
+        try:
+            resp = self._delete(f"storage/volumes/{volume_uuid}/snapshots/{snap_uuid}",
+                                params=params)
+            return resp.get("job", {}).get("uuid", "")
+        except OntapError as exc:
+            if exc.status_code == 400 and "1638644" in str(exc):
+                return self._delete_snapshot_asa(volume_uuid,
+                                                 snap_name or snap_uuid,
+                                                 force=force)
+            raise
+
+    def _delete_snapshot_asa(self, volume_uuid, snap_name, force=False):
+        """ASA CLI-bridge fallback for snapshot deletion."""
+        vol = self._get(f"storage/volumes/{volume_uuid}", params={"fields": "name,svm.name"})
+        vol_name = vol.get("name", "")
+        svm_name = (vol.get("svm") or {}).get("name", "")
+        if not vol_name or not svm_name:
+            raise OntapError("ASA snapshot delete: cannot resolve volume name/SVM")
+        params = {"vserver": svm_name, "volume": vol_name, "snapshot": snap_name}
+        if force:
+            params["ignore-owners"] = "true"
+        try:
+            self._delete("private/cli/snapshot", params=params)
+        except OntapError as exc:
+            if exc.status_code == 404:
+                pass  # already gone
+            else:
+                raise
+        return ""
 
     def restore_volume_snapshot_san(self, volume_uuid, snap_name):
         """Reverts a SAN volume to a snapshot (volume revert).

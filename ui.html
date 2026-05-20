@@ -2690,8 +2690,9 @@ async function deleteSnapshot(id, name) {
 
 async function deleteSnapshotNative(ontap_snap_uuid, mapping_id, name) {
   if (!await uiConfirm(tf('confirm_delete_snap_native', name))) return;
+  var payload = {native:true, ontap_snap_uuid, mapping_id, snap_name: name};
   try {
-    await apiPost('snapshots/delete', {native:true, ontap_snap_uuid, mapping_id});
+    await apiPost('snapshots/delete', payload);
     toast(t('msg_snap_deleted'),'success');
     loadSnapshots();
   } catch(e) {
@@ -2703,7 +2704,7 @@ async function deleteSnapshotNative(ontap_snap_uuid, mapping_id, name) {
     );
     if (!forceOk) return;
     try {
-      await apiPost('snapshots/delete', {native:true, ontap_snap_uuid, mapping_id, force:true});
+      await apiPost('snapshots/delete', {...payload, force:true});
       toast(t('msg_snap_deleted'),'success');
       loadSnapshots();
     } catch(e2) { toast(e2.message,'error'); }
