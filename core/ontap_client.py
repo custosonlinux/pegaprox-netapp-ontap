@@ -1691,11 +1691,25 @@ class OntapClient:
         except Exception as exc:
             raise OntapError(f"PATCH volume/{volume_uuid} network error: {exc}")
         if not r.ok:
-            raise OntapError(f"PATCH volume/{volume_uuid} → {r.status_code}: {r.text[:300]}")
+            body_text = r.text[:400]
+            if r.status_code == 400 and "918703" in body_text:
+                self._resize_volume_asa(volume_uuid, new_size_bytes)
+                return
+            raise OntapError(f"PATCH volume/{volume_uuid} → {r.status_code}: {body_text}")
         resp = r.json() if r.content else {}
         job = (resp.get("job") or {}).get("uuid", "")
         if job:
             self.poll_job(job, interval_s=2, timeout_s=120)
+
+    def _resize_volume_asa(self, volume_uuid, new_size_bytes):
+        vol = self._get(f"storage/volumes/{volume_uuid}", params={"fields": "name,svm.name"})
+        vol_name = vol.get("name", "")
+        svm_name = (vol.get("svm") or {}).get("name", "")
+        if not vol_name or not svm_name:
+            raise OntapError("ASA volume resize: cannot resolve volume name/SVM")
+        self._patch("private/cli/volume",
+                    body={"size": f"{new_size_bytes}b"},
+                    params={"vserver": svm_name, "volume": vol_name})
 
     def resize_lun(self, lun_uuid, new_size_bytes):
         """Grows a LUN to new_size_bytes."""
