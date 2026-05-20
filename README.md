@@ -12,8 +12,8 @@ A [PegaProx](https://github.com/PegaProx/project-pegaprox) community plugin that
 >
 > **Protocol status:**
 > - 🟢 **NFS** — Stable. All core workflows (snapshot, restore, clone, SnapMirror DR) are fully implemented and tested.
-> - 🟡 **SAN — iSCSI** — Beta. Snapshot, single-VM restore, volume revert, VM clone, and end-to-end provisioning are fully implemented and tested.
-> - 🟡 **SAN — NVMe-oF** — Beta. Snapshot, single-VM restore, volume revert, VM clone, and end-to-end provisioning are fully implemented and tested on NetApp ASA with NVMe/TCP.
+> - 🟡 **SAN — iSCSI** — Beta. Snapshot, single-VM restore, volume revert, VM clone, end-to-end provisioning, and SnapMirror DR restore/clone are fully implemented and tested.
+> - 🟡 **SAN — NVMe-oF** — Beta. Snapshot, single-VM restore, volume revert, VM clone, and end-to-end provisioning are fully implemented and tested on NetApp ASA with NVMe/TCP. SnapMirror DR restore/clone is implemented but requires a secondary NVMe system for validation.
 
 ---
 
@@ -125,7 +125,7 @@ The plugin adds its tables to the central PegaProx database on first load (`/opt
 | Clone from ONTAP-native snapshots | ✅ | 🟡 Beta | 🟡 Beta |
 | Multi-VM snapshot | ✅ | 🟡 Beta | 🟡 Beta |
 | ONTAP-native snapshot visibility | ✅ | 🟡 Beta | 🟡 Beta |
-| SnapMirror® visibility & DR restore/clone | ✅ | 🔄 Planned | 🔄 Planned |
+| SnapMirror® visibility & DR restore/clone | ✅ | 🟡 Beta | 🔵 In Development |
 | Storage Provisioning (auto-setup) | ✅ | 🟡 Beta | 🟡 Beta |
 | Storage Resize | ✅ grow & shrink | 🟡 Beta grow only | 🟡 Beta grow only |
 | Job cancellation | ✅ | 🟡 Beta | 🟡 Beta |
@@ -286,6 +286,26 @@ Creates a new VM from a snapshot with a new VMID and freshly generated MAC addre
 
 The VMID is reserved in PVE immediately before the disk copy begins to prevent ID conflicts during long-running operations.
 
+#### DR Restore from SnapMirror Secondary (iSCSI)
+
+Restores a VM directly from a SnapMirror replicated snapshot on the secondary ONTAP cluster, without touching the primary:
+
+1. The target VM is stopped.
+2. A temporary VMID placeholder config is written to PVE immediately to reserve the VMID.
+3. A FlexClone is created from the replicated snapshot on the **secondary** ONTAP cluster.
+4. A temporary iGroup is created and the clone LUN is mapped.
+5. The Proxmox host establishes a **single-path** iSCSI connection to a secondary LIF.
+6. `vgimportclone` imports the clone VG under a temporary name.
+7. Each target VM disk LV is copied (`dd`) from the temporary secondary VG to the **primary** VG.
+8. The temporary iSCSI connection is disconnected and the clone and iGroup are removed from the secondary.
+9. The VM config is restored and the VM is started.
+
+> **Single-path iSCSI note:** DR connections use a single LIF on the secondary — multipath is not active for this path. With `find_multipaths yes` in multipath.conf, no `/dev/mapper/<WWID>` device is created. The plugin detects the device via `/dev/disk/by-id/scsi-<WWID>` as fallback.
+
+#### DR Clone from SnapMirror Secondary (iSCSI)
+
+Same as DR Restore, but instead of overwriting the original VM's disks, creates a new VM with a new VMID and freshly generated MAC addresses. Disk LVs are remapped to the new VMID automatically.
+
 #### Volume Revert (all SAN, including ASA NVMe)
 
 Reverts the entire ONTAP volume to the snapshot state — affects **all VMs** on that datastore:
@@ -391,7 +411,16 @@ Each schedule can send email notifications on snapshot job completion. Configure
 | Recipients | Comma-separated email addresses |
 | Send test email | Sends a test email using the current SMTP settings and the entered recipients |
 
-Notifications include the schedule name, snapshot name, final status, and the last 30 log lines from the job.
+Notifications are sent as HTML emails with a plain-text fallback. The email format includes:
+
+- **Status banner** (full-width, colour-coded): green for success, amber for success-with-warnings, red for failure.
+- **Summary table** — schedule name, snapshot name, status, and timestamp.
+- **Dark terminal log block** — last 30 job log lines with per-line severity tags:
+  - `[INFO]` — informational
+  - `[WARN]` — warnings (amber)
+  - `[ERR]` — errors (red)
+
+The banner colour is determined by the overall outcome: `done` with no warnings → green; `done` with at least one warning → amber; `failed` or any error → red.
 
 ---
 
@@ -469,6 +498,8 @@ dd if=<src_lv> of=<dst_lv> bs=512M iflag=direct oflag=direct conv=fsync
 - **`iflag=direct oflag=direct`** — O_DIRECT on both sides bypasses the page cache and lets NVMe saturate the full device bandwidth without wasting RAM.
 - **Timeout: 4 hours** — covers very large volumes even at constrained throughput.
 
+> **DR iSCSI throughput:** During DR restore/clone from a SnapMirror secondary, the `dd` copy runs across clusters — data flows from the secondary ONTAP cluster to the primary VG over the production network. Throughput is bounded by the inter-site link bandwidth, not by local NVMe/iSCSI speed. For large VMs over limited WAN links, DR operations can take significantly longer than primary restores.
+
 ---
 
 ## Configuration (`config.json`)
@@ -508,11 +539,13 @@ All temporary objects that the plugin creates on ONTAP during a clone or restore
 |---|---|---|
 | NFS FlexClone volume | `pgxclone_{job_id[:8]}` | `pgxclone_ab12cd34` |
 | NFS FlexClone junction path | `/{clone_name}` | `/pgxclone_ab12cd34` |
-| iSCSI temporary LUN | `pgxclone_{job_id[:8]}` | `pgxclone_ab12cd34` |
+| iSCSI temporary LUN (primary restore/clone) | `pgxclone_{job_id[:8]}` | `pgxclone_ab12cd34` |
 | NVMe temporary namespace | `pgxclone_{job_id[:8]}` | `pgxclone_ab12cd34` |
 | Full ONTAP LUN/NS path | `/vol/{volume_name}/{clone_name}` | `/vol/proxvol01/pgxclone_ab12cd34` |
+| iSCSI DR FlexClone volume (on secondary) | `pgxdrclone_{job_id[:8]}` | `pgxdrclone_ab12cd34` |
+| iSCSI DR temporary iGroup (on secondary) | `pgxdr_{job_id[:8]}` | `pgxdr_ab12cd34` |
 
-The `pgxclone_` prefix (short, no hyphens, no special characters) was chosen because ONTAP LUN path components do not reliably allow hyphens on all platforms (notably ASA). Using the same prefix for NFS FlexClone volumes keeps the scheme consistent and predictable.
+The `pgxclone_` prefix (short, no hyphens, no special characters) was chosen because ONTAP LUN path components do not reliably allow hyphens on all platforms (notably ASA). The `pgxdrclone_` and `pgxdr_` prefixes follow the same convention for DR objects created on the secondary cluster.
 
 ### Local temporary mount points on PVE nodes
 
@@ -657,6 +690,8 @@ All routes are relative to `/api/plugins/netapp_storage/api/`.
 | POST | `snapmirror/update` | Trigger a SnapMirror transfer |
 | GET | `snapmirror/secondary-snapshots` | List snapshots on a secondary volume |
 | POST | `snapmirror/ensure-export` | Ensure secondary volume is exported (NFS DR) |
+| POST | `snapmirror/check-secondary` | Check secondary connectivity (NFS export / iSCSI LIF / NVMe LIF) |
+| GET | `snapmirror/dr-snap-vms` | List VMs available in a replicated snapshot (reads from DB manifest) |
 | GET | `provisioning/datastores` | List provisioned datastores |
 | POST | `provisioning/datastores` | Create datastore (starts provisioning job) |
 | POST | `provisioning/datastores/remove` | Remove datastore (starts removal job) |
