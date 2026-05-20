@@ -480,7 +480,7 @@ de:{
   btn_notify_test:'Test-E-Mail senden',msg_notify_test_sent:'Test-E-Mail gesendet',msg_notify_no_recipients:'Keine Empfänger angegeben',
   badge_sm_dr:'DR-Sekär',sm_dr_title:'Restore vom SnapMirror®-Sekundärsystem',
   sm_select_rel:'SnapMirror®-Beziehung',sm_select_snap:'Sekundär-Snapshot',
-  sm_btn_start_dr:'DR-Restore starten',sm_ensure_export:'NFS-Export prüfen',
+  sm_btn_start_dr:'DR-Restore starten',sm_ensure_export:'Sekundär prüfen',
   sm_no_dest_ep:'Kein Sekundär-Endpoint — erst scannen',
   ct_dr_clone:'DR-Clone von Sekundärsystem',btn_start_dr_clone:'DR-Clone starten',
   sm_source_vol:'Quell-Volume',sm_dest_vol:'Ziel-Volume',sm_state:'Zustand',sm_lag:'Verzug',
@@ -594,7 +594,7 @@ en:{
   btn_notify_test:'Send test email',msg_notify_test_sent:'Test email sent',msg_notify_no_recipients:'No recipients specified',
   badge_sm_dr:'DR Secondary',sm_dr_title:'Restore from SnapMirror® secondary',
   sm_select_rel:'SnapMirror® Relationship',sm_select_snap:'Secondary Snapshot',
-  sm_btn_start_dr:'Start DR Restore',sm_ensure_export:'Check NFS Export',
+  sm_btn_start_dr:'Start DR Restore',sm_ensure_export:'Check Secondary',
   sm_no_dest_ep:'No secondary endpoint configured — scan first',
   ct_dr_clone:'DR Clone from Secondary',btn_start_dr_clone:'Start DR Clone',
   sm_source_vol:'Source Volume',sm_dest_vol:'Destination Volume',sm_state:'State',sm_lag:'Lag',
@@ -708,7 +708,7 @@ fr:{
   btn_notify_test:"Envoyer un e-mail de test",msg_notify_test_sent:"E-mail de test envoyé",msg_notify_no_recipients:'Aucun destinataire spécifié',
   badge_sm_dr:'DR Secondaire',sm_dr_title:'Restore depuis SnapMirror® secondaire',
   sm_select_rel:'Relation SnapMirror®',sm_select_snap:'Snapshot Secondaire',
-  sm_btn_start_dr:'Démarrer DR Restore',sm_ensure_export:'Vérifier Export NFS',
+  sm_btn_start_dr:'Démarrer DR Restore',sm_ensure_export:'Vérifier Secondaire',
   sm_no_dest_ep:'Aucun endpoint secondaire configuré — scanner d\'abord',
   ct_dr_clone:'DR Clone depuis le secondaire',btn_start_dr_clone:'Démarrer DR Clone',
   sm_source_vol:'Volume Source',sm_dest_vol:'Volume Destination',sm_state:'État',sm_lag:'Décalage',
@@ -822,7 +822,7 @@ es:{
   btn_notify_test:'Enviar e-mail de prueba',msg_notify_test_sent:'E-mail de prueba enviado',msg_notify_no_recipients:'No se especificaron destinatarios',
   badge_sm_dr:'DR Secundario',sm_dr_title:'Restore desde SnapMirror® secundario',
   sm_select_rel:'Relación SnapMirror®',sm_select_snap:'Snapshot Secundario',
-  sm_btn_start_dr:'Iniciar DR Restore',sm_ensure_export:'Verificar Export NFS',
+  sm_btn_start_dr:'Iniciar DR Restore',sm_ensure_export:'Verificar Secundario',
   sm_no_dest_ep:'Sin endpoint secundario configurado — escanear primero',
   ct_dr_clone:'DR Clone desde Secundario',btn_start_dr_clone:'Iniciar DR Clone',
   sm_source_vol:'Volumen Origen',sm_dest_vol:'Volumen Destino',sm_state:'Estado',sm_lag:'Retraso',
@@ -936,7 +936,7 @@ pt:{
   btn_notify_test:'Enviar e-mail de teste',msg_notify_test_sent:'E-mail de teste enviado',msg_notify_no_recipients:'Nenhum destinatário especificado',
   badge_sm_dr:'DR Secundário',sm_dr_title:'Restore do SnapMirror® secundário',
   sm_select_rel:'Relação SnapMirror®',sm_select_snap:'Snapshot Secundário',
-  sm_btn_start_dr:'Iniciar DR Restore',sm_ensure_export:'Verificar Export NFS',
+  sm_btn_start_dr:'Iniciar DR Restore',sm_ensure_export:'Verificar Secundário',
   sm_no_dest_ep:'Sem endpoint secundário configurado — escanear primeiro',
   ct_dr_clone:'DR Clone do Secundário',btn_start_dr_clone:'Iniciar DR Clone',
   sm_source_vol:'Volume Origem',sm_dest_vol:'Volume Destino',sm_state:'Estado',sm_lag:'Atraso',
@@ -1050,7 +1050,7 @@ ko:{
   btn_notify_test:'테스트 이메일 전송',msg_notify_test_sent:'테스트 이메일 전송됨',msg_notify_no_recipients:'수신자가 지정되지 않음',
   badge_sm_dr:'DR 보조',sm_dr_title:'SnapMirror® 보조에서 복원',
   sm_select_rel:'SnapMirror® 관계',sm_select_snap:'보조 스냅샷',
-  sm_btn_start_dr:'DR 복원 시작',sm_ensure_export:'NFS 내보내기 확인',
+  sm_btn_start_dr:'DR 복원 시작',sm_ensure_export:'보조 확인',
   sm_no_dest_ep:'보조 엔드포인트 미구성 — 먼저 스캔하세요',
   ct_dr_clone:'보조에서 DR 클론',btn_start_dr_clone:'DR 클론 시작',
   sm_source_vol:'소스 볼륨',sm_dest_vol:'대상 볼륨',sm_state:'상태',sm_lag:'지연',
@@ -1164,7 +1164,7 @@ it:{
   btn_notify_test:'Invia e-mail di prova',msg_notify_test_sent:'E-mail di prova inviata',msg_notify_no_recipients:'Nessun destinatario specificato',
   badge_sm_dr:'DR Secondario',sm_dr_title:'Restore da SnapMirror® secondario',
   sm_select_rel:'Relazione SnapMirror®',sm_select_snap:'Snapshot Secondario',
-  sm_btn_start_dr:'Avvia DR Restore',sm_ensure_export:'Verifica Export NFS',
+  sm_btn_start_dr:'Avvia DR Restore',sm_ensure_export:'Verifica Secondario',
   sm_no_dest_ep:'Nessun endpoint secondario configurato — scansionare prima',
   ct_dr_clone:'DR Clone dal Secondario',btn_start_dr_clone:'Avvia DR Clone',
   sm_source_vol:'Volume Sorgente',sm_dest_vol:'Volume Destinazione',sm_state:'Stato',sm_lag:'Ritardo',
@@ -1564,18 +1564,20 @@ function applyI18n() {
           </div>
           <div class="form-group">
             <label data-i18n="sm_select_snap">Secondary Snapshot</label>
-            <select id="dr_snap_name">
+            <select id="dr_snap_name" onchange="loadDrSnapVmids()">
               <option value=""></option>
             </select>
           </div>
           <div class="form-group">
             <label data-i18n="lbl_vm_id">VM-ID</label>
-            <select id="dr_vmid"><option value=""></option></select>
+            <select id="dr_vmid" style="display:none"><option value=""></option></select>
+            <input id="dr_vmid_input" type="number" placeholder="Enter VM ID" style="display:none">
+            <p id="dr_vmid_hint" class="hint" style="color:var(--muted);margin:4px 0 0;display:none"></p>
           </div>
         </div>
         <p id="dr_no_ep_hint" class="hint" style="color:var(--warning,#e5a800);display:none" data-i18n="sm_no_dest_ep">No secondary endpoint configured — run scan first</p>
         <div class="form-actions">
-          <button class="btn btn-ghost btn-sm" onclick="drEnsureExport()" data-i18n="sm_ensure_export">Check NFS Export</button>
+          <button class="btn btn-ghost btn-sm" onclick="drCheckSecondary()" data-i18n="sm_ensure_export">Check Secondary</button>
           <button class="btn btn-primary" onclick="startDrRestore()" data-i18n="sm_btn_start_dr">Start DR Restore</button>
         </div>
       </div>
@@ -3748,7 +3750,7 @@ async function loadDrSecondarySnaps() {
   var relId = document.getElementById('dr_relationship').value;
   var sel = document.getElementById('dr_snap_name');
   sel.innerHTML = '<option value=""></option>';
-  document.getElementById('dr_vmid').innerHTML = '<option value=""></option>';
+  _drVmidReset();
   if (!relId) return;
   try {
     var data = await apiFetch('snapmirror/secondary-snapshots?relationship_id='+encodeURIComponent(relId));
@@ -3756,40 +3758,65 @@ async function loadDrSecondarySnaps() {
       return '<option value="'+esc(s.name)+'">'+esc(s.name)+'</option>';
     }).join('');
   } catch(e) { toast(e.message, 'error'); }
-  loadDrRestoreVmids(relId);
 }
 
-async function loadDrRestoreVmids(relId) {
-  var vmSel = document.getElementById('dr_vmid');
-  vmSel.innerHTML = '<option value=""></option>';
-  if (!relId) return;
+function _drVmidReset() {
+  var sel = document.getElementById('dr_vmid');
+  var inp = document.getElementById('dr_vmid_input');
+  var hint = document.getElementById('dr_vmid_hint');
+  sel.innerHTML = '<option value=""></option>';
+  sel.style.display = 'none';
+  inp.value = '';
+  inp.style.display = 'none';
+  hint.style.display = 'none';
+}
+
+async function loadDrSnapVmids() {
+  var relId = document.getElementById('dr_relationship').value;
+  var snap  = document.getElementById('dr_snap_name').value;
+  _drVmidReset();
+  if (!relId || !snap) return;
+  var sel  = document.getElementById('dr_vmid');
+  var inp  = document.getElementById('dr_vmid_input');
+  var hint = document.getElementById('dr_vmid_hint');
   try {
-    var rels = await apiFetch('snapmirror/relationships');
-    var rel = (rels||[]).find(function(r){ return r.id === relId; });
-    if (!rel) return;
-    var mappings = await apiFetch('volume-mappings');
-    var mapping = (mappings||[]).find(function(m){ return m.volume_uuid === rel.source_volume_uuid; });
-    if (!mapping) return;
-    var d = await apiFetch('snapshots/vms-for-mapping?mapping_id='+encodeURIComponent(mapping.id));
-    vmSel.innerHTML = '<option value=""></option>' + (d.vms||[]).map(function(v){
-      return '<option value="'+v.vmid+'">'+v.vmid+' – '+esc(v.name||'')+(v.node?' ('+esc(v.node)+')':'')+'</option>';
-    }).join('');
-  } catch(e) {}
+    var d = await apiPost('snapmirror/dr-snap-vms', {relationship_id: relId, snap_name: snap});
+    if (d.vms && d.vms.length > 0) {
+      sel.innerHTML = '<option value=""></option>' + d.vms.map(function(v){
+        var label = v.vmid + (v.name && v.name !== 'vm-'+v.vmid ? ' – '+esc(v.name) : '');
+        if (v.vm_type && v.vm_type !== 'qemu') label += ' ('+esc(v.vm_type)+')';
+        return '<option value="'+v.vmid+'">'+label+'</option>';
+      }).join('');
+      sel.style.display = '';
+    } else {
+      // No manifest data — fall back to free-text entry
+      inp.style.display = '';
+      if (d.hint) { hint.textContent = d.hint; hint.style.display = ''; }
+    }
+  } catch(e) {
+    inp.style.display = '';
+    hint.textContent = 'Could not load VMs — enter ID manually';
+    hint.style.display = '';
+  }
 }
 
-async function drEnsureExport() {
+async function drEnsureExport() { return drCheckSecondary(); } // legacy alias
+
+async function drCheckSecondary() {
   var relId = document.getElementById('dr_relationship').value;
   if (!relId) { toast('Please select a relationship', 'error'); return; }
   try {
-    var r = await apiPost('snapmirror/ensure-export', {relationship_id:relId});
-    toast((r.rule_created ? 'Export rule created. ' : 'Export OK. ') + r.nfs_ip+':'+r.junction_path, 'success');
+    var r = await apiPost('snapmirror/check-secondary', {relationship_id:relId});
+    toast(r.details || 'Secondary OK', 'success');
   } catch(e) { toast(e.message, 'error'); }
 }
 
 async function startDrRestore() {
   var relId   = document.getElementById('dr_relationship').value;
   var snap    = document.getElementById('dr_snap_name').value;
-  var vmid    = document.getElementById('dr_vmid').value;
+  var sel     = document.getElementById('dr_vmid');
+  var inp     = document.getElementById('dr_vmid_input');
+  var vmid    = (sel.style.display !== 'none' ? sel.value : inp.value) || '';
   if (!relId || !snap || !vmid) { toast('Please fill in all fields', 'error'); return; }
 
   // Derive mapping_id from the relationships

@@ -125,9 +125,122 @@ def _ensure_export():
         return {"error": str(exc)}, 500
 
 
+def _check_secondary():
+    err = _require_admin()
+    if err:
+        return err
+    data = request.get_json() or {}
+    relationship_id = data.get("relationship_id")
+    if not relationship_id:
+        return {"error": "relationship_id required"}, 400
+
+    db = get_db()
+    from ..core.snapmirror import check_secondary_connectivity
+    try:
+        result = check_secondary_connectivity(db, relationship_id)
+        return result
+    except Exception as exc:
+        return {"error": str(exc)}, 500
+
+
+def _dr_snap_vms():
+    """
+    Returns VMs contained in a specific DR snapshot.
+
+    Looks up the manifest stored in the DB snapshot record for the given
+    relationship + snap_name. Falls back to listing all VMs on the primary
+    mapping's PVE cluster.
+    """
+    data = request.get_json() or {}
+    relationship_id = data.get("relationship_id")
+    snap_name = data.get("snap_name")
+    if not relationship_id or not snap_name:
+        return {"error": "relationship_id and snap_name required"}, 400
+
+    db = get_db()
+    import json
+
+    try:
+        rel = db.query_one(
+            "SELECT * FROM netapp_snapmirror_relationships WHERE id=?",
+            (relationship_id,)
+        )
+        if not rel:
+            return {"error": "Relationship not found"}, 404
+        rel = dict(rel)
+
+        # Find the primary mapping via source_volume_uuid
+        mapping = db.query_one(
+            "SELECT * FROM netapp_volume_mapping WHERE volume_uuid=?",
+            (rel["source_volume_uuid"],)
+        )
+        if not mapping:
+            return {"vms": [], "source": "none", "hint": "No mapping found for source volume"}
+        mapping = dict(mapping)
+
+        # Try to find the snapshot record in the DB (plugin-created snapshots
+        # replicated via SnapMirror carry the same snap_name)
+        snap_row = db.query_one(
+            "SELECT * FROM netapp_snapshots WHERE mapping_id=? AND snap_name=? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (mapping["id"], snap_name),
+        )
+
+        if snap_row:
+            snap = dict(snap_row)
+            manifest_json = snap.get("manifest_json", "")
+            if manifest_json:
+                try:
+                    manifest = json.loads(manifest_json)
+                    vm_types = json.loads(snap.get("vm_types_json") or "{}")
+                    vms_raw = manifest.get("vms", [])
+                    vms = []
+                    for entry in vms_raw:
+                        vmid = entry.get("vmid")
+                        if vmid:
+                            vms.append({
+                                "vmid": int(vmid),
+                                "name": entry.get("name", f"vm-{vmid}"),
+                                "vm_type": vm_types.get(str(vmid), entry.get("vm_type", "qemu")),
+                            })
+                    if vms:
+                        return {"vms": sorted(vms, key=lambda v: v["vmid"]), "source": "manifest"}
+                except Exception:
+                    pass
+
+        # Fallback: list VMs from the primary PVE cluster that are known
+        # from any snapshot of this mapping (vm_types_json column)
+        vmid_set = {}
+        rows = db.query(
+            "SELECT vm_types_json FROM netapp_snapshots WHERE mapping_id=? "
+            "AND vm_types_json IS NOT NULL AND vm_types_json != '' LIMIT 20",
+            (mapping["id"],)
+        ) or []
+        for row in rows:
+            try:
+                for vid, vtype in json.loads(row["vm_types_json"]).items():
+                    vmid_set[int(vid)] = vtype
+            except Exception:
+                pass
+
+        if vmid_set:
+            vms = [{"vmid": vid, "name": f"vm-{vid}", "vm_type": vt}
+                   for vid, vt in sorted(vmid_set.items())]
+            return {"vms": vms, "source": "history",
+                    "hint": "Snapshot not in DB — showing VMs from snapshot history"}
+
+        return {"vms": [], "source": "none",
+                "hint": "No VM information available — enter VMID manually"}
+
+    except Exception as exc:
+        return {"error": str(exc)}, 500
+
+
 def register_routes():
     register_plugin_route(PLUGIN_ID, "snapmirror/scan", _scan_relationships)
     register_plugin_route(PLUGIN_ID, "snapmirror/relationships", _list_relationships)
     register_plugin_route(PLUGIN_ID, "snapmirror/update", _update_relationship)
     register_plugin_route(PLUGIN_ID, "snapmirror/secondary-snapshots", _secondary_snapshots)
     register_plugin_route(PLUGIN_ID, "snapmirror/ensure-export", _ensure_export)
+    register_plugin_route(PLUGIN_ID, "snapmirror/check-secondary", _check_secondary)
+    register_plugin_route(PLUGIN_ID, "snapmirror/dr-snap-vms", _dr_snap_vms)

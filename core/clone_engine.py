@@ -807,14 +807,27 @@ def start_dr_clone_job(job_id, params, username):
     _reg_register(job_id, t)
 
 
-def _run_dr_clone(job_id, params, username):
+def _run_dr_clone_iscsi(job_id, params, username, db, jlog, mapping):
     """
-    Clone from SnapMirror® secondary volume.
-    Mounts the DP volume (read-only NFS), reads manifest, copies disks
-    with new VMID to the primary volume and creates a new VM.
+    DR Clone for iSCSI datastores from SnapMirror® secondary.
+
+    Flow:
+      1. Read manifest from DB, reserve new VMID
+      2. FlexClone from SnapMirror snapshot on secondary
+      3. Temp igroup on secondary, map clone LUN
+      4. Single-path iSCSI connect from PVE host to secondary
+      5. vgimportclone → temp VG
+      6. For each disk: lvcreate with remapped name + dd copy to primary VG
+      7. Cleanup: deactivate temp VG, flush device, logout iSCSI,
+         delete temp igroup + clone volume on secondary
+      8. Write new VM config, optionally start VM
     """
-    db = get_db()
-    jlog = JobLogger(job_id, db)
+    from ._helpers import get_endpoint, build_ontap_client, get_ssh_creds
+    from .san_helpers import (connect_iscsi_target, disconnect_iscsi_target,
+                               find_device_by_serial, flush_iscsi_clone_device,
+                               vg_import_clone, activate_lv_for_restore, lv_copy,
+                               cleanup_restore_vg, get_lv_size_bytes, create_lv,
+                               vg_rescan_and_activate, get_iscsi_initiator_iqn)
 
     relationship_id = params["relationship_id"]
     snap_name       = params["snap_name"]
@@ -822,7 +835,320 @@ def _run_dr_clone(job_id, params, username):
     new_vmid        = int(params["new_vmid"])
     new_name        = params.get("new_name", "")
     start_after     = bool(params.get("start_after", False))
-    mapping_id      = params["mapping_id"]
+
+    vg_name   = mapping["lvm_vg_name"]
+    lvm_type  = mapping.get("lvm_type", "linear")
+    pool_name = mapping.get("lvm_pool_name", "")
+
+    secondary_client    = None
+    temp_lun_uuid       = ""
+    temp_clone_vol_uuid = ""
+    temp_igroup_uuid    = ""
+    sec_portal          = ""
+    sec_target_iqn      = ""
+    temp_vg_name        = ""
+    temp_iscsi_serial   = ""
+    conf_path_reserved  = ""
+    pve_host = pve_user = pve_pass = pve_key = ""
+
+    try:
+        rel = db.query_one(
+            "SELECT * FROM netapp_snapmirror_relationships WHERE id=?",
+            (relationship_id,))
+        if not rel:
+            raise RuntimeError(f"SnapMirror relationship '{relationship_id}' not found")
+        rel = dict(rel)
+        if not rel.get("dest_endpoint_id") or not rel.get("dest_volume_uuid"):
+            raise RuntimeError(
+                "Secondary endpoint or volume UUID missing — run SnapMirror scan first.")
+
+        secondary_ep     = get_endpoint(db, rel["dest_endpoint_id"])
+        secondary_client = build_ontap_client(secondary_ep)
+        dest_svm         = rel["dest_svm"]
+        dest_vol_uuid    = rel["dest_volume_uuid"]
+
+        mgr      = build_pve_client(db, mapping["pve_cluster_id"])
+        pve_user, pve_pass, pve_key = get_ssh_creds(mgr)
+        pve_host = _re_resolve_node_host(mgr, "") or getattr(mgr, "host", "")
+
+        poll_cfg      = load_plugin_config()
+        poll_interval = poll_cfg.get("job_poll_interval_s", 3)
+        poll_timeout  = poll_cfg.get("job_poll_timeout_s", 300)
+
+        # ── 1. Manifest from DB ───────────────────────────────────────────────
+        snap_row = db.query_one(
+            "SELECT * FROM netapp_snapshots WHERE mapping_id=? AND snap_name=? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (mapping["id"], snap_name),
+        )
+        if snap_row:
+            snap = dict(snap_row)
+            import json as _json
+            manifest = _json.loads(snap.get("manifest_json", "{}"))
+            vm_type  = _json.loads(snap.get("vm_types_json") or "{}").get(str(src_vmid), "qemu")
+        else:
+            jlog.log("Snapshot not in DB — disk list will be derived from clone VG.")
+            manifest = {"vms": [{"vmid": src_vmid, "disks": [], "vm_type": "qemu"}]}
+            vm_type  = "qemu"
+
+        vm_entry = _find_vm_in_manifest(manifest, src_vmid)
+        disks    = vm_entry.get("disks", [])
+        vm_type  = vm_entry.get("vm_type", vm_type)
+
+        # Reserve new VMID immediately
+        conf_path_reserved = _reserve_vmid(
+            pve_host, pve_user, pve_pass, pve_key, new_vmid, vm_type, jlog)
+        _re_set_progress(db, job_id, 8)
+
+        # ── 2. FlexClone on secondary ────────────────────────────────────────
+        temp_clone_name = f"pgxdrclone_{job_id[:8]}"
+        jlog.log(f"Cloning volume from secondary snapshot '{snap_name}' …")
+        temp_lun_uuid, temp_clone_vol_uuid = secondary_client.clone_lun_from_snapshot(
+            dest_vol_uuid, snap_name, dest_svm, temp_clone_name,
+            poll_interval=poll_interval, poll_timeout=poll_timeout,
+        )
+        jlog.log(f"Secondary clone volume created: {temp_clone_name}")
+        _re_set_progress(db, job_id, 20)
+
+        # ── 3. Temp igroup on secondary, map clone LUN ───────────────────────
+        jlog.log("Getting host IQN …")
+        host_iqn = get_iscsi_initiator_iqn(pve_host, pve_user, pve_pass, pve_key)
+        if not host_iqn:
+            raise RuntimeError(f"Cannot determine iSCSI IQN of PVE host {pve_host}")
+
+        temp_igroup_name = f"pgxdr_{job_id[:8]}"
+        jlog.log(f"Creating temporary igroup '{temp_igroup_name}' on secondary …")
+        temp_igroup_uuid = secondary_client.create_igroup(
+            dest_svm, temp_igroup_name, protocol="iscsi")
+        secondary_client.add_igroup_initiator(temp_igroup_uuid, host_iqn)
+        secondary_client.map_lun(temp_lun_uuid, temp_igroup_uuid, dest_svm)
+        _re_set_progress(db, job_id, 28)
+
+        # ── 4. iSCSI connect PVE host → secondary ────────────────────────────
+        sec_portal     = secondary_client.get_iscsi_lif_for_svm(dest_svm)
+        sec_target_iqn = secondary_client.get_iscsi_target_iqn(dest_svm)
+        if not sec_portal or not sec_target_iqn:
+            raise RuntimeError(
+                f"Cannot determine secondary iSCSI portal or target IQN "
+                f"(portal={sec_portal!r}, iqn={sec_target_iqn!r})")
+
+        jlog.log(f"Connecting to secondary iSCSI {sec_portal} / {sec_target_iqn} …")
+        connect_iscsi_target(pve_host, pve_user, pve_pass, pve_key,
+                             sec_portal, sec_target_iqn)
+
+        lun_info          = secondary_client.get_lun(temp_lun_uuid)
+        temp_iscsi_serial = lun_info.get("serial_number", "")
+        if not temp_iscsi_serial:
+            raise RuntimeError("Cannot determine serial number of clone LUN on secondary")
+
+        jlog.log(f"Waiting for clone device (serial: {temp_iscsi_serial}) …")
+        device = find_device_by_serial(
+            pve_host, pve_user, pve_pass, pve_key, temp_iscsi_serial, timeout_s=90)
+        jlog.log(f"Clone device: {device}")
+        _re_set_progress(db, job_id, 38)
+
+        # ── 5. vgimportclone → temp VG ───────────────────────────────────────
+        jlog.log(f"Importing clone VG from {device} …")
+        temp_vg_name = vg_import_clone(pve_host, pve_user, pve_pass, pve_key,
+                                       device, vg_name)
+        jlog.log(f"Clone VG imported as '{temp_vg_name}'")
+
+        # If manifest had no disks, derive them from the temp VG
+        if not disks:
+            jlog.log("Deriving disk list from clone VG …")
+            from .san_helpers import get_vg_lv_map
+            lv_map = get_vg_lv_map(pve_host, pve_user, pve_pass, pve_key, temp_vg_name)
+            disks = [{"file": lv} for lv in lv_map if str(src_vmid) in lv]
+            if not disks:
+                disks = [{"file": lv} for lv in lv_map]
+            jlog.log(f"{len(disks)} disk(s) found in clone VG.")
+        _re_set_progress(db, job_id, 45)
+
+        # ── 6. For each disk: create new LV + dd copy ────────────────────────
+        total        = len(disks)
+        new_disk_map = {}
+        jlog.log(f"Copying {total} disk(s): VM {src_vmid} → {new_vmid} …")
+
+        for i, disk in enumerate(disks, 1):
+            check_cancel(job_id)
+            old_file = disk.get("file", "")
+            src_lv   = os.path.basename(old_file.split(":")[-1]) if old_file else ""
+            if not src_lv:
+                continue
+            new_lv = _remap_disk_path(src_lv, src_vmid, new_vmid)
+            new_disk_map[old_file] = new_lv
+            jlog.log(f"  [{i}/{total}] {src_lv} → {new_lv}")
+
+            activate_lv_for_restore(pve_host, pve_user, pve_pass, pve_key,
+                                    temp_vg_name, src_lv, lvm_type, pool_name)
+            size_bytes = get_lv_size_bytes(pve_host, pve_user, pve_pass, pve_key,
+                                           temp_vg_name, src_lv)
+            if not size_bytes:
+                raise RuntimeError(f"Cannot determine size of {temp_vg_name}/{src_lv}")
+
+            create_lv(pve_host, pve_user, pve_pass, pve_key,
+                      vg_name, new_lv, size_bytes, lvm_type, pool_name)
+            lv_copy(pve_host, pve_user, pve_pass, pve_key,
+                    temp_vg_name, src_lv, vg_name, new_lv, jlog)
+            _re_set_progress(db, job_id, 45 + int(i / max(total, 1) * 35))
+
+        # ── 7. Cleanup ────────────────────────────────────────────────────────
+        jlog.log(f"Cleaning up clone VG '{temp_vg_name}' …")
+        cleanup_restore_vg(pve_host, pve_user, pve_pass, pve_key, temp_vg_name)
+        temp_vg_name = ""
+
+        jlog.log("Flushing clone device and disconnecting from secondary …")
+        flush_iscsi_clone_device(pve_host, pve_user, pve_pass, pve_key, temp_iscsi_serial)
+        temp_iscsi_serial = ""
+        disconnect_iscsi_target(pve_host, pve_user, pve_pass, pve_key,
+                                sec_portal, sec_target_iqn)
+        sec_portal = sec_target_iqn = ""
+
+        jlog.log("Removing temporary igroup and clone volume on secondary …")
+        try:
+            secondary_client.delete_igroup(temp_igroup_uuid)
+        except Exception as exc:
+            log.warning(f"[netapp_storage] DR clone: delete temp igroup: {exc}")
+        temp_igroup_uuid = ""
+        try:
+            secondary_client.unmount_volume(temp_clone_vol_uuid)
+        except Exception:
+            pass
+        try:
+            del_job = secondary_client.delete_volume(temp_clone_vol_uuid)
+            if del_job:
+                secondary_client.poll_job(del_job, timeout_s=120)
+        except Exception as exc:
+            log.warning(f"[netapp_storage] DR clone: delete clone volume: {exc}")
+        temp_clone_vol_uuid = ""
+        _re_set_progress(db, job_id, 85)
+
+        try:
+            vg_rescan_and_activate(pve_host, pve_user, pve_pass, pve_key, vg_name)
+        except Exception as exc:
+            log.warning(f"[netapp_storage] DR clone: vg rescan: {exc}")
+
+        # ── 8. Write VM config ────────────────────────────────────────────────
+        eff_name = new_name or f"dr-clone-{vm_entry.get('name', src_vmid)}"
+        jlog.log(f"Writing VM config … (name: {eff_name!r})")
+        raw_conf = vm_entry.get("raw_config", {})
+        conf_str = _build_clone_config(
+            raw_conf, src_vmid, new_vmid,
+            mapping["pve_storage_id"], new_disk_map, eff_name, vm_type,
+        )
+        name_key   = "hostname" if vm_type == "lxc" else "name"
+        conf_lines = [l for l in conf_str.splitlines() if not l.startswith(f"{name_key}:")]
+        conf_lines.append(f"{name_key}: {eff_name}")
+        conf_str   = "\n".join(conf_lines) + "\n"
+
+        conf_subdir = "qemu-server" if vm_type == "qemu" else "lxc"
+        conf_path   = f"/etc/pve/{conf_subdir}/{new_vmid}.conf"
+        ssh_run(pve_host, pve_user, pve_pass,
+                f"cat > {shlex.quote(conf_path)}",
+                stdin_data=conf_str.encode(), key_material=pve_key)
+        conf_path_reserved = ""
+        jlog.log(f"Config written: {conf_path}")
+        _re_set_progress(db, job_id, 92)
+
+        if start_after:
+            node = ""
+            try:
+                node = mgr.find_vm_node(new_vmid) or ""
+            except Exception:
+                pass
+            jlog.log(f"Starting {vm_type.upper()} {new_vmid} …")
+            _vm_start(mgr, node, new_vmid, vm_type)
+
+    except JobCancelledError:
+        jlog.log("Job cancelled by user")
+        _cancel_job(db, job_id)
+        _dr_clone_iscsi_cleanup(secondary_client, temp_igroup_uuid, temp_clone_vol_uuid,
+                                pve_host, pve_user, pve_pass, pve_key,
+                                temp_vg_name, temp_iscsi_serial, sec_portal, sec_target_iqn,
+                                conf_path_reserved)
+        _reg_unregister(job_id)
+        return
+    except Exception as exc:
+        log.error(f"[netapp_storage] DR-Clone iSCSI job {job_id} failed: {exc}")
+        _re_fail_job(db, job_id)
+        jlog.log(f"ERROR: {exc}")
+        _dr_clone_iscsi_cleanup(secondary_client, temp_igroup_uuid, temp_clone_vol_uuid,
+                                pve_host, pve_user, pve_pass, pve_key,
+                                temp_vg_name, temp_iscsi_serial, sec_portal, sec_target_iqn,
+                                conf_path_reserved)
+        _reg_unregister(job_id)
+        return
+
+    _reg_unregister(job_id)
+    _re_finish_job(db, job_id)
+    jlog.log(f"DR-Clone iSCSI {vm_type.upper()} {src_vmid} → {new_vmid} completed.")
+
+
+def _dr_clone_iscsi_cleanup(secondary_client, temp_igroup_uuid, temp_clone_vol_uuid,
+                             pve_host, pve_user, pve_pass, pve_key,
+                             temp_vg_name, temp_iscsi_serial, sec_portal, sec_target_iqn,
+                             conf_path_reserved=""):
+    """Best-effort cleanup after DR iSCSI clone error or cancel."""
+    from .san_helpers import (cleanup_restore_vg, flush_iscsi_clone_device,
+                               disconnect_iscsi_target)
+    if temp_vg_name and pve_host:
+        try:
+            cleanup_restore_vg(pve_host, pve_user, pve_pass, pve_key, temp_vg_name)
+        except Exception as exc:
+            log.warning(f"[netapp_storage] DR clone cleanup VG: {exc}")
+    if temp_iscsi_serial and pve_host:
+        flush_iscsi_clone_device(pve_host, pve_user, pve_pass, pve_key, temp_iscsi_serial)
+    if sec_portal and sec_target_iqn and pve_host:
+        disconnect_iscsi_target(pve_host, pve_user, pve_pass, pve_key,
+                                sec_portal, sec_target_iqn)
+    if secondary_client and temp_igroup_uuid:
+        try:
+            secondary_client.delete_igroup(temp_igroup_uuid)
+        except Exception as exc:
+            log.warning(f"[netapp_storage] DR clone cleanup igroup: {exc}")
+    if secondary_client and temp_clone_vol_uuid:
+        try:
+            secondary_client.unmount_volume(temp_clone_vol_uuid)
+        except Exception:
+            pass
+        try:
+            del_job = secondary_client.delete_volume(temp_clone_vol_uuid)
+            if del_job:
+                secondary_client.poll_job(del_job, timeout_s=60)
+        except Exception as exc:
+            log.warning(f"[netapp_storage] DR clone cleanup clone volume: {exc}")
+    if conf_path_reserved and pve_host:
+        try:
+            ssh_run(pve_host, pve_user, pve_pass,
+                    f"rm -f {shlex.quote(conf_path_reserved)} 2>/dev/null || true",
+                    key_material=pve_key, timeout=10)
+        except Exception:
+            pass
+
+
+def _run_dr_clone(job_id, params, username):
+    """
+    Clone from SnapMirror® secondary volume.
+    NFS: mounts DP volume read-only, copies disk files with new VMID.
+    iSCSI: FlexClone on secondary, single-path iSCSI connect, dd LVs to new LVs.
+    """
+    db = get_db()
+    jlog = JobLogger(job_id, db)
+
+    mapping_id = params["mapping_id"]
+    mapping    = get_mapping(db, mapping_id)
+    protocol   = mapping.get("storage_protocol", "nfs")
+
+    if protocol == "iscsi":
+        _run_dr_clone_iscsi(job_id, params, username, db, jlog, mapping)
+        return
+
+    relationship_id = params["relationship_id"]
+    snap_name       = params["snap_name"]
+    src_vmid        = int(params["src_vmid"])
+    new_vmid        = int(params["new_vmid"])
+    new_name        = params.get("new_name", "")
+    start_after     = bool(params.get("start_after", False))
     cfg             = load_plugin_config()
     dr_mount_base   = cfg.get("flexclone_mount_base", "/mnt/pegaprox-clone")
     dr_mount_point  = None
@@ -834,7 +1160,6 @@ def _run_dr_clone(job_id, params, username):
     try:
         from .snapmirror import ensure_secondary_nfs_export
 
-        mapping = get_mapping(db, mapping_id)
         mgr     = build_pve_client(db, mapping["pve_cluster_id"])
         pve_user, pve_pass, pve_key = get_ssh_creds(mgr)
         pve_host = _re_resolve_node_host(mgr, "") or getattr(mgr, "host", "")

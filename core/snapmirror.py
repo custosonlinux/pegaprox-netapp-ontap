@@ -300,3 +300,122 @@ def ensure_secondary_nfs_export(db, relationship_id):
         )
 
     return nfs_ip, junction, created
+
+
+def check_secondary_connectivity(db, relationship_id):
+    """
+    Protocol-aware connectivity check for the SnapMirror® secondary.
+
+    NFS  — verifies junction path exists, creates export rule if missing.
+    iSCSI — verifies iSCSI service + LIF reachable on destination SVM.
+    NVMe  — verifies NVMe/TCP service + LIF reachable on destination SVM.
+
+    Returns a dict with success=True and human-readable details.
+    Raises RuntimeError when a required prerequisite is missing.
+    """
+    from ._helpers import get_endpoint, build_ontap_client
+
+    rel = db.query_one(
+        "SELECT * FROM netapp_snapmirror_relationships WHERE id=?", (relationship_id,)
+    )
+    if not rel:
+        raise RuntimeError(f"Relationship '{relationship_id}' not found")
+    rel = dict(rel)
+
+    if not rel.get("dest_endpoint_id") or not rel.get("dest_volume_uuid"):
+        raise RuntimeError(
+            "Secondary endpoint or volume UUID missing — run SnapMirror scan first.")
+
+    # Determine protocol from the source volume mapping
+    mapping = db.query_one(
+        "SELECT * FROM netapp_volume_mapping WHERE volume_uuid=?",
+        (rel["source_volume_uuid"],),
+    )
+    protocol = (dict(mapping).get("storage_protocol", "nfs") if mapping else "nfs")
+
+    dest_svm      = rel["dest_svm"]
+    dest_vol_uuid = rel["dest_volume_uuid"]
+
+    secondary_ep     = get_endpoint(db, rel["dest_endpoint_id"])
+    secondary_client = build_ontap_client(secondary_ep)
+
+    # Verify the DP volume is still known
+    try:
+        vol_info = secondary_client.get_volume(dest_vol_uuid)
+        vol_name = vol_info.get("name", dest_vol_uuid)
+    except Exception as exc:
+        raise RuntimeError(f"Cannot reach secondary volume: {exc}")
+
+    if protocol == "nfs":
+        nfs_ip, junction, created = ensure_secondary_nfs_export(db, relationship_id)
+        msg = (
+            f"NFS OK — {nfs_ip}:{junction}"
+            + (" (export rule created)" if created else "")
+        )
+        return {
+            "success": True,
+            "protocol": "nfs",
+            "details": msg,
+            "nfs_ip": nfs_ip,
+            "junction_path": junction,
+            "rule_created": created,
+        }
+
+    elif protocol == "iscsi":
+        portal = secondary_client.get_iscsi_lif_for_svm(dest_svm)
+        target_iqn = secondary_client.get_iscsi_target_iqn(dest_svm)
+        if not portal:
+            raise RuntimeError(
+                f"No iSCSI data LIF found on secondary SVM '{dest_svm}' — "
+                "verify iSCSI service is running and a LIF with data_iscsi role exists.")
+        if not target_iqn:
+            raise RuntimeError(
+                f"iSCSI service has no target IQN on secondary SVM '{dest_svm}'.")
+        msg = (
+            f"iSCSI OK — portal: {portal}, "
+            f"target: {target_iqn}, "
+            f"volume: {vol_name}"
+        )
+        return {
+            "success": True,
+            "protocol": "iscsi",
+            "details": msg,
+            "portal": portal,
+            "target_iqn": target_iqn,
+            "volume": vol_name,
+        }
+
+    elif protocol == "nvme":
+        # NVMe/TCP: look for a LIF with data_nvme_tcp service
+        try:
+            lifs = secondary_client._get_all_records(
+                "network/ip/interfaces",
+                params={"services": "data_nvme_tcp", "svm.name": dest_svm,
+                        "fields": "ip.address,state", "max_records": 50},
+            )
+        except Exception:
+            lifs = []
+        active_lifs = [
+            (r.get("ip") or {}).get("address", "")
+            for r in lifs
+            if r.get("state", "up") == "up"
+        ]
+        active_lifs = [a for a in active_lifs if a]
+        if not active_lifs:
+            raise RuntimeError(
+                f"No NVMe/TCP data LIF found on secondary SVM '{dest_svm}' — "
+                "verify NVMe/TCP service is running and a LIF with data_nvme_tcp role exists.")
+        msg = (
+            f"NVMe/TCP OK — portal(s): {', '.join(active_lifs)}, "
+            f"volume: {vol_name}"
+        )
+        return {
+            "success": True,
+            "protocol": "nvme",
+            "details": msg,
+            "portals": active_lifs,
+            "volume": vol_name,
+        }
+
+    else:
+        raise RuntimeError(f"Unknown storage protocol '{protocol}' for this mapping.")

@@ -142,6 +142,155 @@ def _test_smtp_connection(host, port, username, password, encryption):
                 s.login(username, password)
 
 
+def _log_severity(msg):
+    """Classify a job log message as 'err', 'warn', or 'info'."""
+    ml = msg.lower()
+    if ml.startswith("error:") or ml.startswith("err:") or "error" in ml[:12]:
+        return "err"
+    if ml.startswith("warning:") or ml.startswith("warn:") or "warn" in ml[:12]:
+        return "warn"
+    return "info"
+
+
+def _build_notification_email(subject, schedule_name, snap_name, job_status, log_lines=None,
+                               extra_rows=None):
+    """
+    Returns (html_body, plain_body).
+
+    Builds an HTML email with:
+    - Colour-coded status banner (green / amber / red)
+    - Summary table
+    - Dark terminal block with [INFO]/[WARN]/[ERR]-tagged log lines
+    """
+    # ── Determine overall severity ────────────────────────────────────────────
+    entries = []
+    if log_lines:
+        for entry in log_lines[-50:]:
+            ts  = entry.get('ts', '')[:19].replace('T', ' ')
+            msg = entry.get('msg', str(entry))
+            sev = _log_severity(msg)
+            entries.append((ts, sev, msg))
+
+    has_err  = any(s == "err"  for _, s, _ in entries)
+    has_warn = any(s == "warn" for _, s, _ in entries)
+    is_done  = job_status == 'done'
+
+    if not is_done or has_err:
+        overall = "err"
+    elif has_warn:
+        overall = "warn"
+    else:
+        overall = "ok"
+
+    # ── Visual config per overall status ─────────────────────────────────────
+    _cfg = {
+        "ok":   dict(banner="#16a34a", icon="✓", label="Snapshot Successful",
+                     dot_color="#16a34a", dot_label="Success"),
+        "warn": dict(banner="#d97706", icon="⚠", label="Snapshot Completed with Warnings",
+                     dot_color="#d97706", dot_label="Success (with warnings)"),
+        "err":  dict(banner="#dc2626", icon="✗", label="Snapshot Failed",
+                     dot_color="#dc2626", dot_label="Failed"),
+    }
+    cfg = _cfg[overall]
+
+    status_label = "Success" if is_done else "Failed"
+
+    # ── Summary rows ─────────────────────────────────────────────────────────
+    summary_rows = [
+        ("Schedule",  schedule_name),
+        ("Snapshot",  snap_name),
+        ("Status",    f'<span style="color:{cfg["dot_color"]};font-weight:700">● {cfg["dot_label"]}</span>'),
+    ]
+    if extra_rows:
+        summary_rows.extend(extra_rows)
+
+    summary_html = "".join(
+        f'<tr>'
+        f'<td style="padding:7px 12px 7px 0;color:#6b7280;white-space:nowrap;vertical-align:top">{k}</td>'
+        f'<td style="padding:7px 0;font-weight:500;word-break:break-all">{v}</td>'
+        f'</tr>'
+        for k, v in summary_rows
+    )
+
+    # ── Log lines HTML ────────────────────────────────────────────────────────
+    _sev_color = {"err": "#f87171", "warn": "#fbbf24", "info": "#a3e4b0"}
+    _sev_tag   = {"err": "[ERR] ", "warn": "[WARN]", "info": "[INFO]"}
+
+    def _esc(s):
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    log_rows_html = ""
+    if entries:
+        for ts, sev, msg in entries:
+            color = _sev_color[sev]
+            tag   = _sev_tag[sev]
+            log_rows_html += (
+                f'<div style="margin:1px 0">'
+                f'<span style="color:#6b7280;user-select:none">{_esc(ts)} </span>'
+                f'<span style="color:{color};font-weight:700;user-select:none">{tag} </span>'
+                f'<span style="color:{color if sev != "info" else "#d1fae5"}">{_esc(msg)}</span>'
+                f'</div>'
+            )
+    else:
+        log_rows_html = '<div style="color:#6b7280;font-style:italic">No log entries.</div>'
+
+    # ── Full HTML ─────────────────────────────────────────────────────────────
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:20px;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif">
+<div style="max-width:680px;margin:0 auto">
+
+  <!-- Status banner -->
+  <div style="background:{cfg['banner']};border-radius:8px 8px 0 0;padding:22px 28px;color:#fff">
+    <div style="font-size:22px;font-weight:700">{cfg['icon']}&nbsp; {cfg['label']}</div>
+    <div style="font-size:13px;opacity:.85;margin-top:4px">NetApp ONTAP Storage Plugin · PegaProx</div>
+  </div>
+
+  <!-- Summary card -->
+  <div style="background:#fff;padding:24px 28px;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb">
+    <table style="width:100%;border-collapse:collapse">
+      {summary_html}
+    </table>
+  </div>
+
+  <!-- Log terminal -->
+  <div style="background:#0f172a;border-radius:0 0 8px 8px;padding:20px 24px">
+    <div style="font-size:11px;font-weight:700;color:#64748b;letter-spacing:.08em;text-transform:uppercase;margin-bottom:12px">
+      Job Log
+    </div>
+    <div style="font-family:'Courier New',Courier,monospace;font-size:11.5px;line-height:1.65">
+      {log_rows_html}
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="text-align:center;font-size:11px;color:#9ca3af;margin-top:14px">
+    PegaProx NetApp ONTAP Plugin
+  </div>
+
+</div>
+</body>
+</html>"""
+
+    # ── Plain-text fallback ───────────────────────────────────────────────────
+    plain_lines = [
+        subject,
+        "=" * len(subject),
+        "",
+        f"Schedule : {schedule_name}",
+        f"Snapshot : {snap_name}",
+        f"Status   : {status_label}",
+        "",
+    ]
+    if entries:
+        plain_lines.append("--- Log ---")
+        for ts, sev, msg in entries:
+            plain_lines.append(f"{ts}  {_sev_tag[sev]}  {msg}")
+
+    return html, "\n".join(plain_lines)
+
+
 def send_job_notification(schedule_name, job_status, snap_name,
                           recipients_csv, notify_on, log_lines=None):
     """Send a snapshot job result notification email.
@@ -173,28 +322,18 @@ def send_job_notification(schedule_name, job_status, snap_name,
             return
 
         status_str = 'Success' if job_status == 'done' else job_status.capitalize()
-        subject = f"[PegaProx] Snapshot {status_str}: {schedule_name} — {snap_name}"
-        body_lines = [
-            f"Schedule:  {schedule_name}",
-            f"Snapshot:  {snap_name}",
-            f"Status:    {status_str}",
-            "",
-        ]
-        if log_lines:
-            body_lines.append("--- Log ---")
-            for entry in log_lines[-30:]:
-                ts  = entry.get('ts', '')
-                msg = entry.get('msg', str(entry))
-                body_lines.append(f"{ts}  {msg}")
+        subject    = f"[PegaProx] Snapshot {status_str}: {schedule_name} — {snap_name}"
 
-        body = "\n".join(body_lines)
+        html_body, plain_body = _build_notification_email(
+            subject, schedule_name, snap_name, job_status, log_lines)
+
         recipients = [r.strip() for r in recipients_csv.split(',') if r.strip()]
-
-        msg = email.mime.multipart.MIMEMultipart()
+        msg = email.mime.multipart.MIMEMultipart('alternative')
         msg['From']    = from_addr
         msg['To']      = ', '.join(recipients)
         msg['Subject'] = subject
-        msg.attach(email.mime.text.MIMEText(body, 'plain', 'utf-8'))
+        msg.attach(email.mime.text.MIMEText(plain_body, 'plain', 'utf-8'))
+        msg.attach(email.mime.text.MIMEText(html_body,  'html',  'utf-8'))
 
         _send_smtp(host, port, username, password, encryption, from_addr, recipients, msg.as_string())
         log.info(f"[netapp_storage] Notification sent for schedule '{schedule_name}' ({job_status})")
@@ -252,16 +391,21 @@ def _notify_test():
     recipients = [r.strip() for r in recipients_csv.split(',') if r.strip()]
     now_str = datetime.now(timezone.utc).isoformat()
 
-    msg = email.mime.multipart.MIMEMultipart()
+    subject = '[PegaProx] Test notification — NetApp ONTAP plugin'
+    fake_log = [
+        {"ts": now_str, "msg": "SMTP connection test initiated"},
+        {"ts": now_str, "msg": "If you received this email, notifications are configured correctly."},
+    ]
+    html_body, plain_body = _build_notification_email(
+        subject, "— test —", "— test —", "done", fake_log,
+        extra_rows=[("Sent", now_str)]
+    )
+    msg = email.mime.multipart.MIMEMultipart('alternative')
     msg['From']    = from_addr
     msg['To']      = ', '.join(recipients)
-    msg['Subject'] = '[PegaProx] Test notification — NetApp ONTAP plugin'
-    body = (
-        "This is a test notification from the PegaProx NetApp ONTAP plugin.\n\n"
-        f"Sent: {now_str}\n"
-        "If you received this email, SMTP notifications are configured correctly."
-    )
-    msg.attach(email.mime.text.MIMEText(body, 'plain', 'utf-8'))
+    msg['Subject'] = subject
+    msg.attach(email.mime.text.MIMEText(plain_body, 'plain', 'utf-8'))
+    msg.attach(email.mime.text.MIMEText(html_body,  'html',  'utf-8'))
 
     try:
         _send_smtp(host, port, username, password, encryption, from_addr, recipients, msg.as_string())

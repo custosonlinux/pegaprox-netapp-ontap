@@ -313,17 +313,23 @@ def _iscsi_serial_to_mapper(serial):
 
 
 def find_device_by_serial(ssh_host, ssh_user, ssh_pass, ssh_key, serial, timeout_s=90):
-    """Finds the multipath block device for an ONTAP iSCSI LUN by serial number.
+    """Finds the block device for an ONTAP iSCSI LUN by serial number.
 
-    Computes the exact /dev/mapper WWID path and polls until it appears.
-    Returns device path or raises RuntimeError on timeout.
+    Tries (in order):
+    1. /dev/mapper/<wwid>           — multipath device (multi-path or find_multipaths no)
+    2. /dev/disk/by-id/scsi-<wwid>  — raw sdX device via udev (find_multipaths yes / single-path)
+
+    Returns the resolved device path or raises RuntimeError on timeout.
     """
     mapper_dev = _iscsi_serial_to_mapper(serial)
     if not mapper_dev:
         raise RuntimeError(f"Cannot compute mapper path for serial {serial!r}")
+    wwid = mapper_dev.replace("/dev/mapper/", "")
+    byid_dev = f"/dev/disk/by-id/scsi-{wwid}"
 
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
+        # 1. Multipath device
         try:
             out = ssh_run(
                 ssh_host, ssh_user, ssh_pass,
@@ -335,15 +341,30 @@ def find_device_by_serial(ssh_host, ssh_user, ssh_pass, ssh_key, serial, timeout
                 return mapper_dev
         except Exception:
             pass
+        # 2. Raw device via /dev/disk/by-id/ (single-path / find_multipaths yes)
+        try:
+            out = ssh_run(
+                ssh_host, ssh_user, ssh_pass,
+                f"test -L {shlex.quote(byid_dev)} && readlink -f {shlex.quote(byid_dev)} || echo no",
+                capture=True, key_material=ssh_key, timeout=10,
+            )
+            result = out.strip()
+            if result and result != "no":
+                log.info(f"[netapp_storage] raw device for serial {serial}: {result}")
+                return result
+        except Exception:
+            pass
         time.sleep(3)
-    raise RuntimeError(f"Block device with serial {serial} not found after {timeout_s}s")
+    raise RuntimeError(
+        f"Block device with serial {serial} not found after {timeout_s}s "
+        f"(tried {mapper_dev} and {byid_dev})"
+    )
 
 
 def flush_iscsi_clone_device(ssh_host, ssh_user, ssh_pass, ssh_key, serial):
-    """Remove the multipath device for a clone LUN from the host after ONTAP cleanup.
+    """Remove the iSCSI clone device from the host after ONTAP cleanup.
 
-    Computes the WWID from the serial (same formula as _iscsi_serial_to_mapper),
-    disables queuing, flushes the dm device, and removes the underlying sdX paths.
+    Handles both multipath DM devices and single-path raw sdX devices.
     Errors are logged but not raised — cleanup is best-effort.
     """
     if not serial:
@@ -352,17 +373,22 @@ def flush_iscsi_clone_device(ssh_host, ssh_user, ssh_pass, ssh_key, serial):
     if not mapper_dev:
         return
     wwid = shlex.quote(mapper_dev.replace("/dev/mapper/", ""))
-    # Collect sdX paths before flushing (multipathd forgets them after flush).
+    byid = shlex.quote(f"/dev/disk/by-id/scsi-{mapper_dev.replace('/dev/mapper/', '')}")
+    # multipath path: disable queuing, flush DM device, delete underlying sdX
+    # single-path fallback: find sdX via by-id symlink and delete via sysfs
     flush_cmd = (
         f"WWID={wwid}; "
-        # Collect sdX paths before flushing (multipathd forgets them after flush).
+        f"BYID={byid}; "
+        # Collect sdX paths known to multipathd (multipath case)
         "devs=$(multipathd show paths format '%d %w' 2>/dev/null"
         "       | awk -v w=$WWID '$2==w{print $1}'); "
         "multipathd disablequeueing map $WWID 2>/dev/null; "
         "multipath -f $WWID 2>/dev/null; "
-        # For each path: resolve the exact SCSI address (H:C:I:L) from the sysfs
-        # symlink and delete via scsi_device — this also cleans /proc/scsi/scsi.
-        # Fall back to block-layer delete if the symlink can't be resolved.
+        # Single-path fallback: pick up the sdX via /dev/disk/by-id
+        "if [ -z \"$devs\" ] && [ -L $BYID ]; then "
+        "  devs=$(basename $(readlink -f $BYID 2>/dev/null)); "
+        "fi; "
+        # Delete each sdX device through sysfs
         "for d in $devs; do "
         "  hcil=$(readlink /sys/block/$d 2>/dev/null"
         "         | grep -oE '[0-9]+:[0-9]+:[0-9]+:[0-9]+' | tail -1); "
@@ -377,9 +403,42 @@ def flush_iscsi_clone_device(ssh_host, ssh_user, ssh_pass, ssh_key, serial):
     try:
         ssh_run(ssh_host, ssh_user, ssh_pass, flush_cmd,
                 key_material=ssh_key, timeout=30)
-        log.info(f"[netapp_storage] flushed multipath device {wwid} (serial={serial})")
+        log.info(f"[netapp_storage] flushed iSCSI device {wwid} (serial={serial})")
     except Exception as exc:
-        log.warning(f"[netapp_storage] flush multipath (serial={serial}): {exc}")
+        log.warning(f"[netapp_storage] flush iSCSI device (serial={serial}): {exc}")
+
+
+def connect_iscsi_target(ssh_host, ssh_user, ssh_pass, ssh_key, portal, target_iqn):
+    """Discovers and logs into a new iSCSI target on the host, then triggers multipath."""
+    cmd = (
+        f"iscsiadm -m discovery -t st -p {shlex.quote(portal)} 2>/dev/null; "
+        f"iscsiadm -m node -T {shlex.quote(target_iqn)} -p {shlex.quote(portal)} "
+        f"--login 2>/dev/null; "
+        "sleep 3; "
+        "udevadm settle --timeout=10 2>/dev/null; "
+        "multipath 2>/dev/null; "
+        "multipathd reconfigure 2>/dev/null; "
+        "sleep 2; "
+        "true"
+    )
+    ssh_run(ssh_host, ssh_user, ssh_pass, cmd, key_material=ssh_key, timeout=60)
+    log.info(f"[netapp_storage] iSCSI connect {target_iqn} via {portal} done")
+
+
+def disconnect_iscsi_target(ssh_host, ssh_user, ssh_pass, ssh_key, portal, target_iqn):
+    """Logs out from an iSCSI target and removes its discovery/node record."""
+    cmd = (
+        f"iscsiadm -m node -T {shlex.quote(target_iqn)} "
+        f"-p {shlex.quote(portal)} --logout 2>/dev/null || true; "
+        f"iscsiadm -m node -T {shlex.quote(target_iqn)} "
+        f"-p {shlex.quote(portal)} --op delete 2>/dev/null || true; "
+        "true"
+    )
+    try:
+        ssh_run(ssh_host, ssh_user, ssh_pass, cmd, key_material=ssh_key, timeout=30)
+        log.info(f"[netapp_storage] iSCSI logout {target_iqn} via {portal} done")
+    except Exception as exc:
+        log.warning(f"[netapp_storage] iSCSI logout {target_iqn}: {exc}")
 
 
 # ── Restore: VG importieren ───────────────────────────────────────────────────
