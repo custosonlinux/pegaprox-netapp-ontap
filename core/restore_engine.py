@@ -259,19 +259,20 @@ def _run_restore_flexclone(job_id, params, username):
 def _run_restore_san(job_id, params, username):
     """SAN restore via ONTAP volume snapshot revert.
 
-    Reverts the entire NVMe/iSCSI volume to the snapshot:
-    1. Stop VM
-    2. Deactivate LVM VG (prevents I/O during revert)
-    3. Revert ONTAP volume to snapshot (CLI bridge)
-    4. Rescan and activate VG
-    5. Restore config from DB
-    6. Start VM
+    Stops ALL VMs in the volume, reverts the ONTAP volume, then restarts them.
+
+    1. Stop all VMs in the volume (from snapshot manifest or VG LV scan)
+    2. Deactivate LVM VG on all PVE hosts
+    3. Revert ONTAP volume to snapshot
+    4. Reactivate LVM VG on all PVE hosts
+    5. Restore PVE configs for all reverted VMs
+    6. Start all VMs that were running before
     """
     db = get_db()
     jlog = JobLogger(job_id, db)
 
     snapshot_id = params["snapshot_id"]
-    vmid = int(params["vmid"])
+    vmid = int(params["vmid"])  # selected VM — used as fallback if manifest is empty
 
     try:
         snap = get_snapshot_record(db, snapshot_id)
@@ -280,17 +281,9 @@ def _run_restore_san(job_id, params, username):
         client = build_ontap_client(endpoint)
 
         mgr = build_pve_client(db, snap["pve_cluster_id"])
-        node = snap["node"] or ""
-        if not node:
-            try:
-                node = mgr.find_vm_node(vmid) or ""
-            except Exception:
-                pass
         pve_user, pve_pass, pve_key = get_ssh_creds(mgr)
-        pve_host = _resolve_node_host(mgr, node)
 
-        vm_types = json.loads(snap.get("vm_types_json") or "{}")
-        vm_type = vm_types.get(str(vmid), "qemu")
+        vm_types_map = json.loads(snap.get("vm_types_json") or "{}")
         snap_name = snap["snap_name"]
         vg_name = mapping.get("lvm_vg_name", "")
 
@@ -300,16 +293,67 @@ def _run_restore_san(job_id, params, username):
                 "Re-run discovery."
             )
 
-        # ── 1. VM stoppen ─────────────────────────────────────────────
-        jlog.log(f"Stopping {vm_type.upper()} {vmid} …")
-        _vm_stop(mgr, node, vmid, vm_type)
-        _set_progress(db, job_id, 10)
+        # Collect all VMIDs in this volume; fall back to just the selected VM
+        all_vmids = json.loads(snap.get("vmids_json") or "[]")
+        if not all_vmids:
+            all_vmids = [vmid]
 
-        # ── 2. LVM VG deaktivieren ────────────────────────────────────
-        jlog.log(f"Deactivating LVM VG '{vg_name}' …")
+        # ── 1. Stop all VMs in the volume ────────────────────────────
+        port = getattr(mgr, "port", 8006)
+        stopped_vms = []   # (vmid, vm_type, node) — will be restarted after revert
+        for vid in all_vmids:
+            vtype = vm_types_map.get(str(vid), "qemu")
+            vt = "qemu" if vtype == "qemu" else "lxc"
+            try:
+                vnode = mgr.find_vm_node(vid) or ""
+                if not vnode:
+                    jlog.log(f"WARNING: cannot locate VM {vid} — skipping")
+                    continue
+                r = mgr._api_get(
+                    f"https://{mgr.host}:{port}/api2/json/nodes/{vnode}/{vt}/{vid}/status/current"
+                )
+                if not r.ok:
+                    continue
+                status = r.json().get("data", {}).get("status", "stopped")
+                if status != "stopped":
+                    jlog.log(f"Stopping {vtype.upper()} {vid} …")
+                    _vm_stop(mgr, vnode, vid, vtype)
+                stopped_vms.append((vid, vtype, vnode))
+            except Exception as exc:
+                jlog.log(f"WARNING: could not stop VM {vid}: {exc}")
+        _set_progress(db, job_id, 20)
+
+        # ── 2. Deactivate VG on all PVE hosts ────────────────────────
         from .san_helpers import vg_deactivate, vg_rescan_and_activate
-        vg_deactivate(pve_host, pve_user, pve_pass, pve_key, vg_name)
-        _set_progress(db, job_id, 25)
+        pve_host_ids = []
+        try:
+            ds_row = db.query_one(
+                "SELECT pve_host_ids FROM netapp_provisioned_datastores WHERE volume_uuid=?",
+                (mapping["volume_uuid"],)
+            )
+            if ds_row:
+                pve_host_ids = json.loads(ds_row.get("pve_host_ids") or "[]")
+        except Exception:
+            pass
+
+        if not pve_host_ids:
+            # Fallback: primary host only
+            primary_node = (stopped_vms[0][2] if stopped_vms
+                            else snap.get("node") or "")
+            primary_host = _resolve_node_host(mgr, primary_node)
+            pve_host_ids = [snap["pve_cluster_id"]]
+            jlog.log(f"Deactivating LVM VG '{vg_name}' on {primary_host} …")
+            vg_deactivate(primary_host, pve_user, pve_pass, pve_key, vg_name)
+        else:
+            for hid in pve_host_ids:
+                try:
+                    h = build_pve_client(db, hid)
+                    hu, hp, hk = get_ssh_creds(h)
+                    jlog.log(f"[{h.host}] Deactivating LVM VG '{vg_name}' …")
+                    vg_deactivate(h.host, hu, hp, hk, vg_name)
+                except Exception as exc:
+                    jlog.log(f"WARNING: VG deactivate on host {hid}: {exc}")
+        _set_progress(db, job_id, 35)
 
         # ── 3. ONTAP Volume Revert ────────────────────────────────────
         jlog.log(f"Reverting ONTAP volume to snapshot '{snap_name}' …")
@@ -321,22 +365,38 @@ def _run_restore_san(job_id, params, username):
                 interval_s=poll_cfg.get("job_poll_interval_s", 3),
                 timeout_s=poll_cfg.get("job_poll_timeout_s", 300),
             )
-        jlog.log("Volume-Revert completed.")
+        jlog.log("Volume revert completed.")
         _set_progress(db, job_id, 60)
 
-        # ── 4. LVM VG reaktivieren ────────────────────────────────────
-        jlog.log(f"Reactivating LVM VG '{vg_name}' …")
-        vg_rescan_and_activate(pve_host, pve_user, pve_pass, pve_key, vg_name)
+        # ── 4. Reactivate VG on all PVE hosts ────────────────────────
+        primary_host = _resolve_node_host(mgr,
+                                          stopped_vms[0][2] if stopped_vms
+                                          else snap.get("node") or "")
+        for hid in pve_host_ids:
+            try:
+                h = build_pve_client(db, hid)
+                hu, hp, hk = get_ssh_creds(h)
+                jlog.log(f"[{h.host}] Reactivating LVM VG '{vg_name}' …")
+                vg_rescan_and_activate(h.host, hu, hp, hk, vg_name)
+            except Exception as exc:
+                jlog.log(f"WARNING: VG reactivate on host {hid}: {exc}")
         _set_progress(db, job_id, 75)
 
-        # ── 5. Config wiederherstellen ────────────────────────────────
-        jlog.log("Restoring VM config …")
-        _restore_config(snap, mapping, vmid, vm_type, node, mgr,
-                        pve_host, pve_user, pve_pass, pve_key)
+        # ── 5. Restore PVE configs for all VMs ───────────────────────
+        for (vid, vtype, vnode) in stopped_vms:
+            try:
+                vhost = _resolve_node_host(mgr, vnode)
+                _restore_config(snap, mapping, vid, vtype, vnode, mgr,
+                                vhost, pve_user, pve_pass, pve_key)
+                jlog.log(f"Config restored for {vtype.upper()} {vid}.")
+            except Exception as exc:
+                jlog.log(f"WARNING: config restore for VM {vid}: {exc}")
         _set_progress(db, job_id, 88)
 
-        # ── 6. Rescan + VM starten ────────────────────────────────────
-        _rescan_and_start(mgr, node, vmid, vm_type, pve_host, pve_user, pve_pass, pve_key)
+        # ── 6. Start all VMs ─────────────────────────────────────────
+        for (vid, vtype, vnode) in stopped_vms:
+            jlog.log(f"Starting {vtype.upper()} {vid} …")
+            _vm_start(mgr, vnode, vid, vtype)
 
     except JobCancelledError:
         jlog.log("Job cancelled by user")
@@ -352,7 +412,7 @@ def _run_restore_san(job_id, params, username):
 
     _reg_unregister(job_id)
     _finish_job(db, job_id)
-    jlog.log(f"SAN restore for {vm_type.upper()} {vmid} completed.")
+    jlog.log(f"Volume revert completed — {len(stopped_vms)} VM(s) restarted.")
 
 
 # ── SAN Single-VM Restore (temp clone → LV copy) ──────────────────────────────
