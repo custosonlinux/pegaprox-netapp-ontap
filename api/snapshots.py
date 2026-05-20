@@ -394,6 +394,7 @@ def _delete_snapshot():
     if data.get("native"):
         ontap_snap_uuid = data.get("ontap_snap_uuid")
         mapping_id = data.get("mapping_id")
+        force = bool(data.get("force", False))
         if not ontap_snap_uuid or not mapping_id:
             return {"error": "ontap_snap_uuid and mapping_id required"}, 400
         try:
@@ -401,7 +402,8 @@ def _delete_snapshot():
             mapping = get_mapping(db, mapping_id)
             endpoint = get_endpoint(db, mapping["endpoint_id"])
             client = build_ontap_client(endpoint)
-            del_job = client.delete_snapshot(mapping["volume_uuid"], ontap_snap_uuid)
+            del_job = client.delete_snapshot(mapping["volume_uuid"], ontap_snap_uuid,
+                                             force=force)
             if del_job:
                 client.poll_job(del_job, timeout_s=120)
         except Exception as exc:

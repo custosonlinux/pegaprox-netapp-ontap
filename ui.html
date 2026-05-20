@@ -2694,7 +2694,20 @@ async function deleteSnapshotNative(ontap_snap_uuid, mapping_id, name) {
     await apiPost('snapshots/delete', {native:true, ontap_snap_uuid, mapping_id});
     toast(t('msg_snap_deleted'),'success');
     loadSnapshots();
-  } catch(e) { toast(e.message,'error'); }
+  } catch(e) {
+    var msg = e.message || String(e);
+    var forceOk = await uiConfirm(
+      t('lang')==='de'
+        ? 'Löschen fehlgeschlagen:\n' + msg + '\n\nMit force=true erneut versuchen? (kann automatisch verwaltete Snapshots entfernen, bricht keine SnapMirror-Beziehungen)'
+        : 'Delete failed:\n' + msg + '\n\nRetry with force=true? (removes auto-managed snapshots; does not break SnapMirror relationships)'
+    );
+    if (!forceOk) return;
+    try {
+      await apiPost('snapshots/delete', {native:true, ontap_snap_uuid, mapping_id, force:true});
+      toast(t('msg_snap_deleted'),'success');
+      loadSnapshots();
+    } catch(e2) { toast(e2.message,'error'); }
+  }
 }
 
 // ═══════════════════════════ CLONE ════════════════════════════════════════

@@ -522,6 +522,11 @@ def _provision_iscsi(ds_id, params, db, jlog):
         try:
             volume_uuid = client.create_volume_san(svm_name, volume_name, size_bytes, aggregate_name=aggregate_name)
             jlog.log(f"Volume created: {volume_uuid}")
+            try:
+                client.enable_inline_compression(volume_uuid)
+                jlog.log("Inline compression enabled.")
+            except Exception as _ce:
+                jlog.log(f"NOTE: inline compression not set ({_ce}) — AFF/ASA enable it by default.")
         except OntapError as exc:
             if exc.status_code == 405:
                 jlog.log("ASA platform detected — volume will be auto-provisioned with LUN.")
@@ -1387,6 +1392,11 @@ def _provision_nvme(ds_id, params, db, jlog):
             volume_uuid = client.create_volume_san(svm_name, volume_name, size_bytes,
                                                    aggregate_name=aggregate_name)
             jlog.log(f"Volume created: {volume_uuid}")
+            try:
+                client.enable_inline_compression(volume_uuid)
+                jlog.log("Inline compression enabled.")
+            except Exception as _ce:
+                jlog.log(f"NOTE: inline compression not set ({_ce}) — AFF/ASA enable it by default.")
         except OntapError as exc:
             if exc.status_code == 405:
                 jlog.log("ASA platform detected — volume will be auto-provisioned with namespace.")
@@ -2000,6 +2010,11 @@ def _provision_nfs(ds_id, params, db, jlog):
                                                aggregate_name=aggregate_name,
                                                export_policy=policy_name)
         jlog.log(f"Volume created: {volume_uuid}")
+        try:
+            client.enable_inline_compression(volume_uuid)
+            jlog.log("Inline compression enabled.")
+        except Exception as _ce:
+            jlog.log(f"NOTE: inline compression not set ({_ce}) — AFF/ASA enable it by default.")
     else:
         vol_info       = client.get_volume(volume_uuid)
         volume_name    = vol_info.get("name", volume_name)

@@ -61,6 +61,16 @@ class OntapClient:
             raise OntapError(f"POST {path} → {r.status_code}: {r.text[:300]}", r.status_code)
         return r.json()
 
+    def _patch(self, path, body=None, params=None):
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        try:
+            r = self._session.patch(url, json=body or {}, params=params, timeout=self.timeout)
+        except requests.RequestException as e:
+            raise OntapError(f"PATCH {path} network error: {e}")
+        if not r.ok:
+            raise OntapError(f"PATCH {path} → {r.status_code}: {r.text[:300]}", r.status_code)
+        return r.json() if r.content else {}
+
     def _delete(self, path, params=None):
         url = f"{self.base_url}/{path.lstrip('/')}"
         try:
@@ -244,10 +254,18 @@ class OntapClient:
     def get_snapshot(self, volume_uuid, snap_uuid):
         return self._get(f"storage/volumes/{volume_uuid}/snapshots/{snap_uuid}")
 
-    def delete_snapshot(self, volume_uuid, snap_uuid):
-        """Deletes a snapshot. Returns job UUID."""
+    def delete_snapshot(self, volume_uuid, snap_uuid, force=False):
+        """Deletes a snapshot. Returns job UUID.
+
+        force=True: pass ?force=true to ONTAP (removes snapshot even if it has dependents
+        such as automatic policy snapshots). Does NOT break SnapMirror relationships —
+        only bypasses the "snapshot is busy" guard for non-SM-locked snapshots.
+        """
+        params = {"return_timeout": 0}
+        if force:
+            params["force"] = "true"
         resp = self._delete(f"storage/volumes/{volume_uuid}/snapshots/{snap_uuid}",
-                            params={"return_timeout": 0})
+                            params=params)
         return resp.get("job", {}).get("uuid", "")
 
     def restore_volume_snapshot_san(self, volume_uuid, snap_name):
@@ -687,6 +705,8 @@ class OntapClient:
             "size": size_bytes,
             "style": "flexvol",
             "guarantee": {"type": "none"},
+            "snapshot_policy": {"name": "none"},
+            "space": {"snapshot": {"reserve_percent": 0}},
         }
         if aggregate_name:
             body["aggregates"] = [{"name": aggregate_name}]
@@ -703,6 +723,14 @@ class OntapClient:
         if not vol_uuid:
             raise OntapError(f"Volume '{vol_name}' not found after creation")
         return vol_uuid
+
+    def enable_inline_compression(self, vol_uuid):
+        """Enable inline compression on a volume (needed for FAS; AFF/ASA enable it by default).
+
+        Raises OntapError on unexpected failures; callers should log and continue.
+        """
+        self._patch(f"storage/volumes/{vol_uuid}",
+                    body={"efficiency": {"compression": "inline"}})
 
     def create_lun(self, svm_name, volume_name, lun_name, size_bytes, os_type="linux",
                    auto_provision_as_flexvol=False):
