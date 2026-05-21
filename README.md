@@ -2,6 +2,50 @@
 
 A [PegaProx](https://github.com/PegaProx/project-pegaprox) community plugin that adds VM-consistent NetApp® ONTAP® snapshot management directly to the PegaProx UI — for **NFS**, **iSCSI**, and **NVMe-oF** (NVMe/TCP, NVMe/FC) datastores.
 
+---
+
+## What this plugin does
+
+This plugin connects PegaProx to one or more NetApp ONTAP systems and gives you full snapshot lifecycle management for Proxmox VE — without leaving the PegaProx interface:
+
+- **Snapshot** any VM or set of VMs on a shared ONTAP datastore — crash-consistent, app-consistent (QEMU guest agent), or suspend-based.
+- **Restore** individual VMs (SFSR for NFS, LV copy for SAN) or revert an entire datastore to a snapshot in seconds (volume revert).
+- **Clone** VMs from any snapshot to a new VMID with fresh MAC addresses.
+- **Schedule** automatic snapshots with retention policies, pre/post hooks, and email notifications.
+- **Replicate** snapshots to a secondary ONTAP cluster via SnapMirror® and restore or clone directly from the replica — without touching the primary.
+- **Provision** new SAN datastores end-to-end (iSCSI and NVMe-oF): ONTAP volume + LUN/namespace + iGroup/subsystem creation, host-side iSCSI/NVMe setup, LVM VG creation, and PVE storage registration — in a single wizard.
+
+All operations run as background jobs with live log streaming. Every snapshot embeds a manifest (VM inventory + configs) that travels inside the ONTAP snapshot, making restores self-contained.
+
+---
+
+## Feature Matrix
+
+| Feature | NFS | iSCSI | NVMe-oF |
+|---|:---:|:---:|:---:|
+| Auto-Discovery | ✅ | ✅ | ✅ |
+| VM-consistent Snapshots (crash / app / suspend) | ✅ | ✅ | ✅ |
+| Scheduled Snapshots | ✅ | ✅ | ✅ |
+| Email notifications per schedule | ✅ | ✅ | ✅ |
+| Manifest rides inside ONTAP snapshot | ✅ | ✅ | ✅ |
+| Restore — SFSR (Single-File, NFS only) | ✅ | ❌ n/a | ❌ n/a |
+| Restore — Single VM (LV-copy via temp clone) | ❌ n/a | 🟡 Beta | 🟡 Beta¹ |
+| Restore — Volume Revert (all VMs) | ✅ | 🟡 Beta | 🟡 Beta |
+| VM Clone from snapshot | ✅ | 🟡 Beta | 🟡 Beta¹ |
+| Clone from ONTAP-native snapshots | ✅ | 🟡 Beta | 🟡 Beta |
+| Multi-VM snapshot | ✅ | 🟡 Beta | 🟡 Beta |
+| ONTAP-native snapshot visibility | ✅ | 🟡 Beta | 🟡 Beta |
+| SnapMirror® visibility & DR restore/clone | ✅ | 🟡 Beta | 🔵 In Development |
+| Storage Provisioning (auto-setup) | ✅ | 🟡 Beta | 🟡 Beta |
+| Storage Resize | ✅ grow & shrink | 🟡 Beta grow only | 🟡 Beta grow only |
+| Job cancellation | ✅ | 🟡 Beta | 🟡 Beta |
+
+Legend: ✅ Stable · 🟡 Beta · 🟠 Alpha · 🔵 In Development · 🔄 Planned · ❌ N/A
+
+¹ NVMe Single VM Restore and Clone on ASA use a full volume clone via the ONTAP CLI bridge (`private/cli/volume/clone`). Direct namespace clone APIs are not available on ASA, but the volume clone approach achieves identical results (see platform table below).
+
+---
+
 > **Maturity levels:**
 > - ✅ **Stable** — Tested in a lab environment and found to be reliable and stable under test conditions.
 > - 🟡 **Beta** — Implemented and partially tested. Occasional errors may still occur that require investigation. Use with caution.
@@ -12,8 +56,71 @@ A [PegaProx](https://github.com/PegaProx/project-pegaprox) community plugin that
 >
 > **Protocol status:**
 > - 🟢 **NFS** — Stable. All core workflows (snapshot, restore, clone, SnapMirror DR) are fully implemented and tested.
-> - 🟡 **SAN — iSCSI** — Beta. Snapshot, single-VM restore, volume revert, VM clone, end-to-end provisioning, and SnapMirror DR restore/clone are fully implemented and tested.
-> - 🟡 **SAN — NVMe-oF** — Beta. Snapshot, single-VM restore, volume revert, VM clone, and end-to-end provisioning are fully implemented and tested on NetApp ASA with NVMe/TCP. SnapMirror DR restore/clone is implemented but requires a secondary NVMe system for validation.
+> - 🟡 **SAN — iSCSI** — Beta. Auto-discovery, snapshots, schedules, single-VM restore, volume revert, VM clone, end-to-end provisioning, and SnapMirror DR restore/clone are fully implemented and tested.
+> - 🟡 **SAN — NVMe-oF** — Beta. Auto-discovery, snapshots, schedules, single-VM restore, volume revert, VM clone, and end-to-end provisioning are fully implemented and tested on NetApp ASA with NVMe/TCP. SnapMirror DR restore/clone is implemented but requires a secondary NVMe system for validation.
+
+---
+
+## Platform & Protocol Compatibility
+
+The plugin auto-detects the ONTAP platform (`san_optimized` flag) and adapts the available restore methods accordingly. No manual configuration is needed.
+
+| Platform | Protocol | Snapshot | Single VM Restore | Volume Revert | Clone |
+|---|---|:---:|:---:|:---:|:---:|
+| FAS / AFF | NFS | ✅ | ✅ SFSR | — | ✅ FlexClone |
+| FAS / AFF | iSCSI | ✅ | ✅ LUN clone | ✅ | ✅ LUN clone |
+| FAS / AFF | NVMe-oF | ✅ | ✅ NS clone | ✅ | ✅ NS clone |
+| ASA | iSCSI | ✅ | ✅ LUN clone | ✅ | ✅ LUN clone |
+| ASA | NVMe-oF | ✅ | ✅ Volume clone² | ✅ | ✅ Volume clone² |
+
+**How ASA NVMe single-VM restore/clone works:** Direct namespace clone APIs are not available on ASA (`POST protocols/nvme/namespaces` → 404, `POST storage/volumes` FlexClone → 405). The plugin uses the ONTAP CLI bridge (`POST private/cli/volume/clone`) to create a full volume clone from the snapshot instead. The NVMe namespace inside the clone volume inherits the parent subsystem mapping and becomes immediately visible on the Proxmox hosts as a new block device — exactly what is needed for the LVM `vgimportclone` + `dd` restore/clone flow.
+
+² ASA NVMe uses `POST private/cli/volume/clone` (CLI bridge) instead of the native REST namespace clone. The restore/clone result is identical to iSCSI/FAS/AFF.
+
+---
+
+## Requirements
+
+### PegaProx
+Version **0.9.9** or later.
+
+### ONTAP
+All features are included in **ONTAP One** (ONTAP 9.10.1+) at no extra cost:
+
+| Feature | License | Included in ONTAP One |
+|---|---|---|
+| Volume Snapshots | Base | ✓ |
+| Single-File Snapshot Restore (SFSR) | SnapRestore® | ✓ |
+| Volume Snapshot Restore (revert) | SnapRestore® | ✓ |
+| FlexClone | FlexClone® | ✓ |
+| NVMe-oF / iSCSI | SAN | ✓ |
+
+**Tested platforms:** ONTAP 9.13+ (NFS/iSCSI), NetApp ASA (All-SAN Array) with NVMe/TCP on ONTAP 9.18.1 — including end-to-end provisioning, single-VM restore, and VM clone.
+
+### Proxmox packages (PVE nodes)
+
+**For NFS** — no additional packages required.
+
+**For iSCSI:**
+```bash
+apt install open-iscsi multipath-tools lvm2
+```
+
+**For NVMe-oF:**
+```bash
+apt install nvme-cli lvm2
+# Load NVMe/TCP kernel module and persist across reboots
+modprobe nvme-tcp
+echo nvme-tcp >> /etc/modules-load.d/nvme-tcp.conf
+```
+
+### Network access from the PegaProx host
+```
+PegaProx  →  Proxmox API         TCP 8006
+PegaProx  →  ONTAP cluster-mgmt  TCP 443
+PegaProx  →  Proxmox nodes       TCP 22 (SSH)
+PegaProx  →  SMTP server         TCP 25/465/587  (optional, for email notifications)
+```
 
 ---
 
@@ -106,96 +213,6 @@ systemctl restart pegaprox
 In the PegaProx UI: **Settings → Plugins → NetApp Storage → Enable**.
 
 The plugin adds its tables to the central PegaProx database on first load (`/opt/PegaProx/config/pegaprox.db`).
-
----
-
-## Feature Matrix
-
-| Feature | NFS | iSCSI | NVMe-oF |
-|---|:---:|:---:|:---:|
-| Auto-Discovery | ✅ | 🟡 Beta | 🟡 Beta |
-| VM-consistent Snapshots (crash / app / suspend) | ✅ | 🟡 Beta | 🟡 Beta |
-| Scheduled Snapshots | ✅ | 🟡 Beta | 🟡 Beta |
-| Email notifications per schedule | ✅ | 🟡 Beta | 🟡 Beta |
-| Manifest rides inside ONTAP snapshot | ✅ | 🟡 Beta | 🟡 Beta |
-| Restore — SFSR (Single-File, NFS only) | ✅ | ❌ n/a | ❌ n/a |
-| Restore — Single VM (LV-copy via temp clone) | ❌ n/a | 🟡 Beta | 🟡 Beta¹ |
-| Restore — Volume Revert (all VMs) | ✅ | 🟡 Beta | 🟡 Beta |
-| VM Clone from snapshot | ✅ | 🟡 Beta | 🟡 Beta¹ |
-| Clone from ONTAP-native snapshots | ✅ | 🟡 Beta | 🟡 Beta |
-| Multi-VM snapshot | ✅ | 🟡 Beta | 🟡 Beta |
-| ONTAP-native snapshot visibility | ✅ | 🟡 Beta | 🟡 Beta |
-| SnapMirror® visibility & DR restore/clone | ✅ | 🟡 Beta | 🔵 In Development |
-| Storage Provisioning (auto-setup) | ✅ | 🟡 Beta | 🟡 Beta |
-| Storage Resize | ✅ grow & shrink | 🟡 Beta grow only | 🟡 Beta grow only |
-| Job cancellation | ✅ | 🟡 Beta | 🟡 Beta |
-
-Legend: ✅ Stable · 🟡 Beta · 🟠 Alpha · 🔵 In Development · 🔄 Planned · ❌ N/A
-
-¹ NVMe Single VM Restore and Clone on ASA use a full volume clone via the ONTAP CLI bridge (`private/cli/volume/clone`). Direct namespace clone APIs are not available on ASA, but the volume clone approach achieves identical results (see platform table below).
-
----
-
-## Platform & Protocol Compatibility
-
-The plugin auto-detects the ONTAP platform (`san_optimized` flag) and adapts the available restore methods accordingly. No manual configuration is needed.
-
-| Platform | Protocol | Snapshot | Single VM Restore | Volume Revert | Clone |
-|---|---|:---:|:---:|:---:|:---:|
-| FAS / AFF | NFS | ✅ | ✅ SFSR | — | ✅ FlexClone |
-| FAS / AFF | iSCSI | ✅ | ✅ LUN clone | ✅ | ✅ LUN clone |
-| FAS / AFF | NVMe-oF | ✅ | ✅ NS clone | ✅ | ✅ NS clone |
-| ASA | iSCSI | ✅ | ✅ LUN clone | ✅ | ✅ LUN clone |
-| ASA | NVMe-oF | ✅ | ✅ Volume clone² | ✅ | ✅ Volume clone² |
-
-**How ASA NVMe single-VM restore/clone works:** Direct namespace clone APIs are not available on ASA (`POST protocols/nvme/namespaces` → 404, `POST storage/volumes` FlexClone → 405). The plugin uses the ONTAP CLI bridge (`POST private/cli/volume/clone`) to create a full volume clone from the snapshot instead. The NVMe namespace inside the clone volume inherits the parent subsystem mapping and becomes immediately visible on the Proxmox hosts as a new block device — exactly what is needed for the LVM `vgimportclone` + `dd` restore/clone flow.
-
-² ASA NVMe uses `POST private/cli/volume/clone` (CLI bridge) instead of the native REST namespace clone. The restore/clone result is identical to iSCSI/FAS/AFF.
-
----
-
-## Requirements
-
-### PegaProx
-Version **0.9.9** or later.
-
-### ONTAP
-All features are included in **ONTAP One** (ONTAP 9.10.1+) at no extra cost:
-
-| Feature | License | Included in ONTAP One |
-|---|---|---|
-| Volume Snapshots | Base | ✓ |
-| Single-File Snapshot Restore (SFSR) | SnapRestore® | ✓ |
-| Volume Snapshot Restore (revert) | SnapRestore® | ✓ |
-| FlexClone | FlexClone® | ✓ |
-| NVMe-oF / iSCSI | SAN | ✓ |
-
-**Tested platforms:** ONTAP 9.13+ (NFS/iSCSI), NetApp ASA (All-SAN Array) with NVMe/TCP on ONTAP 9.18.1 — including end-to-end provisioning, single-VM restore, and VM clone.
-
-### Proxmox packages (PVE nodes)
-
-**For NFS** — no additional packages required.
-
-**For iSCSI:**
-```bash
-apt install open-iscsi multipath-tools lvm2
-```
-
-**For NVMe-oF:**
-```bash
-apt install nvme-cli lvm2
-# Load NVMe/TCP kernel module and persist across reboots
-modprobe nvme-tcp
-echo nvme-tcp >> /etc/modules-load.d/nvme-tcp.conf
-```
-
-### Network access from the PegaProx host
-```
-PegaProx  →  Proxmox API         TCP 8006
-PegaProx  →  ONTAP cluster-mgmt  TCP 443
-PegaProx  →  Proxmox nodes       TCP 22 (SSH)
-PegaProx  →  SMTP server         TCP 25/465/587  (optional, for email notifications)
-```
 
 ---
 
