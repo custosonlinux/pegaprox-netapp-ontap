@@ -1,7 +1,7 @@
 """
-Tests für snapshot_engine Hilfsfunktionen
+Tests for snapshot_engine helper functions
 
-Testet isolierte Logik ohne PegaProx-Laufzeitabhängigkeiten.
+Tests isolated logic without PegaProx runtime dependencies.
 """
 
 import json
@@ -33,7 +33,7 @@ _req_stub.auth.HTTPBasicAuth = _HTTPBasicAuth
 sys.modules.setdefault('requests', _req_stub)
 sys.modules.setdefault('requests.auth', _req_stub.auth)
 
-# Minimale Stubs für PegaProx-Module damit import nicht knallt
+# Minimal stubs for PegaProx modules so imports don't fail
 for mod in ['pegaprox', 'pegaprox.globals', 'pegaprox.core', 'pegaprox.core.db',
             'pegaprox.constants', 'pegaprox.utils', 'pegaprox.utils.ssh_pool']:
     if mod not in sys.modules:

@@ -1,9 +1,9 @@
 """
-Auto-Discovery: gleicht PVE-Storages mit ONTAP-Volumes/LUNs ab.
+Auto-Discovery: matches PVE storages to ONTAP volumes/LUNs.
 
-NFS:  PVE-NFS-Server-IP ∈ ONTAP-LIF-IPs → SVM → Volume via junction_path.
-SAN:  PVE-LVM-VG → PV-Device-Seriennummer ∈ ONTAP-LUN-Seriennummern → Volume.
-      Unterstützt iSCSI (direkt + Multipath) und NVMe-oF.
+NFS:  PVE NFS server IP ∈ ONTAP LIF IPs → SVM → volume via junction_path.
+SAN:  PVE LVM VG → PV device serial ∈ ONTAP LUN serials → volume.
+      Supports iSCSI (direct + multipath) and NVMe-oF.
 """
 
 import logging
@@ -37,10 +37,10 @@ def _db_execute_retry(db, sql, params, retries=8, delay=0.4):
 # ── PVE-API-Session ───────────────────────────────────────────────────────────
 
 def _pve_session(pve_host):
-    """Baut eine requests.Session mit PVE-Ticket-Auth auf.
+    """Build a requests.Session with PVE ticket auth.
 
     pve_host: {host, port, username, password, ssl_verify}
-    Gibt (session, base_url) zurück oder wirft bei Fehler.
+    Returns (session, base_url) or raises on error.
     """
     base = f"https://{pve_host['host']}:{pve_host['port']}/api2/json"
     ssl_verify = bool(pve_host.get("ssl_verify", 0))
@@ -70,9 +70,9 @@ def _pve_session(pve_host):
 
 
 def _get_pve_nfs_storages(pve_host):
-    """Alle NFS-Storages eines PVE-Hosts.
+    """All NFS storages of a PVE host.
 
-    Gibt (storages, error_msg) zurück.
+    Returns (storages, error_msg).
     storages = [{storage_id, server, export, nfs_mount_path, pve_host_id}]
     """
     try:
@@ -110,12 +110,12 @@ def _resolve_ips(host):
     return ips
 
 
-# ── Haupt-Discovery ───────────────────────────────────────────────────────────
+# ── Main discovery ────────────────────────────────────────────────────────────
 
 def run_discovery(endpoint_id=None):
-    """Führt die Discovery durch.
+    """Run the full discovery pass.
 
-    Rückgabe: (found_mappings, debug_info)
+    Returns (found_mappings, debug_info).
     """
     db  = get_db()
     now = datetime.now(timezone.utc).isoformat()
@@ -136,7 +136,7 @@ def run_discovery(endpoint_id=None):
 
     if not pve_rows:
         debug_info["no_match_reasons"].append(
-            "Keine PVE-Hosts konfiguriert. Bitte im Tab 'Endpoints' einen PVE-Host hinzufügen."
+            "No PVE hosts configured. Please add a PVE host in the 'Endpoints' tab."
         )
         return found_mappings, debug_info
 
@@ -187,9 +187,9 @@ def run_discovery(endpoint_id=None):
         ep = dict(ep_row)
         ep["password"] = db._decrypt(ep.pop("password_encrypted", ""))
 
-        # SAN-only Systeme (z. B. NetApp ASA) überspringen beim NFS-Scan
+        # SAN-only systems (e.g. NetApp ASA) skip NFS scan
         if ep.get("skip_nfs"):
-            log.info(f"[netapp_storage] NFS-Scan übersprungen für '{ep['name']}' (skip_nfs=1)")
+            log.info(f"[netapp_storage] NFS scan skipped for '{ep['name']}' (skip_nfs=1)")
             continue
 
         try:
@@ -304,7 +304,7 @@ def run_discovery(endpoint_id=None):
                     f"→ SVM {matched_svm}/{vol_name} (LIF {matched_ip})"
                 )
             except Exception as exc:
-                msg = (f"DB-Insert fehlgeschlagen für '{stor['storage_id']}': {exc} "
+                msg = (f"DB insert failed for '{stor['storage_id']}': {exc} "
                        f"| endpoint_id={ep['id']} vol_uuid={vol_uuid!r} vol_name={vol_name!r}")
                 log.warning(f"[netapp_storage] {msg}")
                 debug_info["no_match_reasons"].append(msg)
@@ -320,16 +320,16 @@ def run_discovery(endpoint_id=None):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _ssh_creds(pve_host):
-    """Gibt (host, user, password, key_material) für ssh_run zurück."""
+    """Returns (host, user, password, key_material) for ssh_run."""
     uname = pve_host.get("username", "root@pam")
     return pve_host["host"], uname.split("@")[0], pve_host["password"], ""
 
 
 def _get_pve_lvm_storages(pve_host):
-    """Alle lvm/lvmthin-Storages eines PVE-Hosts mit PV-Device und Seriennummer.
+    """All lvm/lvmthin storages of a PVE host with PV device and serial number.
 
-    Nutzt die PVE-REST-API für VG-Name/Pool-Name und SSH für pvs + lsblk.
-    Gibt (storages, error_msg) zurück.
+    Uses PVE REST API for VG/pool name and SSH for pvs + lsblk.
+    Returns (storages, error_msg).
     storages = [{storage_id, vg_name, lvm_type, pool_name,
                  pv_device, pv_serial, protocol, pve_host_id, pve_host_name}]
     """
@@ -396,10 +396,10 @@ def _get_pve_lvm_storages(pve_host):
                 if len(parts) >= 2 and parts[1].strip():
                     serial_map[parts[0].lstrip()] = parts[1].strip()
         except Exception as exc:
-            log.warning(f"[netapp_storage] lsblk auf {pve_host['host']} fehlgeschlagen: {exc}")
+            log.warning(f"[netapp_storage] lsblk failed on {pve_host['host']}: {exc}")
             serial_map = {}
 
-        # Alles zusammenführen
+        # Merge PV serials into storage entries
         for stor in lvm_storages:
             pvs_for_vg = pv_map.get(stor["vg_name"], [])
             if not pvs_for_vg:
@@ -415,9 +415,9 @@ def _get_pve_lvm_storages(pve_host):
 
             if "nvme" in pv_dev:
                 # NVMe-oF: Namespace-UUID aus sysfs lesen.
-                # Wenn der PV auf einer Partition liegt (z.B. nvme1n1p1),
-                # muss der Parent-Namespace (nvme1n1) für die UUID-Abfrage
-                # verwendet werden — Partitionen haben kein uuid-Attribut.
+                # If the PV is on a partition (e.g. nvme1n1p1), the parent
+                # namespace (nvme1n1) must be used for UUID lookup — partitions
+                # have no uuid attribute.
                 stor["protocol"] = "nvme"
                 import re as _re
                 ns_base = _re.sub(r'p\d+$', '', dev_base)  # nvme1n1p1 → nvme1n1
@@ -430,7 +430,7 @@ def _get_pve_lvm_storages(pve_host):
                     )
                     ns_uuid = uuid_out.strip().lower()
                     if not ns_uuid:
-                        # Fallback: nvme-cli (ältere Kernel ohne sysfs uuid)
+                        # Fallback: nvme-cli (older kernels without sysfs uuid)
                         uuid_out2 = ssh_run(
                             h, u, p,
                             f"nvme id-ns {shlex.quote(ns_dev)} 2>/dev/null "
@@ -646,7 +646,7 @@ def _run_san_discovery(db, ep_rows, pve_rows, found_mappings, debug_info, now):
 
 def _san_upsert(db, ep, location, svm_obj, lun_uuid, lun_path,
                 stor, found_mappings, debug_info, now):
-    """Legt ein SAN-Mapping an oder aktualisiert es (ON CONFLICT)."""
+    """Insert or update a SAN mapping (ON CONFLICT)."""
     vol_uuid = (location.get("volume") or {}).get("uuid", "")
     vol_name = (location.get("volume") or {}).get("name", "")
     svm_name = svm_obj.get("name", "")

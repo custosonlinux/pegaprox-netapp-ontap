@@ -1,7 +1,7 @@
 """
-Tests für OntapClient
+Tests for OntapClient
 
-Kein echter ONTAP nötig – alle HTTP-Calls werden via unittest.mock abgefangen.
+No real ONTAP needed — all HTTP calls are intercepted via unittest.mock.
 """
 
 import json
@@ -117,7 +117,7 @@ class TestSnapshotOperations(unittest.TestCase):
         job_uuid = self.client.create_snapshot('vol-uuid-123', 'pegaprox-test', comment='test')
         self.assertEqual(job_uuid, 'job-uuid-xyz')
         call_args = self.client._session.post.call_args
-        # kwargs enthält json=...; expliziter key-Zugriff statt or-Fallback (leeres dict ist falsy)
+        # kwargs contains json=...; explicit key access instead of or-fallback (empty dict is falsy)
         sent_body = call_args.kwargs.get('json', call_args[1].get('json', {}))
         self.assertEqual(sent_body.get('name'), 'pegaprox-test')
 

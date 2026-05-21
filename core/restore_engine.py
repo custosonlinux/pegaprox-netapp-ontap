@@ -106,7 +106,7 @@ def _run_restore_sfsr(job_id, params, username):
             )
             _set_progress(db, job_id, int(i / total * 80))
 
-        # ── Config zurückspielen ──────────────────────────────────────
+        # ── Restore VM config ─────────────────────────────────────────
         jlog.log("Restoring VM config …")
         _restore_config(snap, mapping, vmid, vm_type, node, mgr,
                         pve_host, pve_user, pve_pass, pve_key)

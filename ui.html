@@ -1411,7 +1411,7 @@ function applyI18n() {
         <div style="margin:14px 0 8px;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em" data-i18n="sect_vms_include">Include VMs</div>
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:10px">
           <input type="checkbox" id="sched_sync_vmids" onchange="toggleSchedSyncVmids()">
-          <span>Alle VMs im Datastore automatisch sichern</span>
+          <span>Automatically include all VMs in this datastore</span>
         </label>
         <div id="sched_vmids_manual">
           <select id="sched_vmids_select" multiple size="6" style="width:100%;min-height:120px;margin-bottom:4px">
@@ -3039,14 +3039,14 @@ async function loadSchedules() {
       var lastRun = s.last_run_at ? fmtDate(s.last_run_at)+' '+statusBadge(s.last_run_status) : '–';
       var vmDisplay = '<div class="vm-bubble-box">';
       if (s.sync_vmids) {
-        vmDisplay += '<span class="badge" style="background:var(--primary);color:#fff;margin-right:4px" title="VMs werden vor jedem Run automatisch aus dem Datastore gelesen">Auto</span>';
+        vmDisplay += '<span class="badge" style="background:var(--primary);color:#fff;margin-right:4px" title="VMs are fetched from the datastore before each run">Auto</span>';
       }
       vmDisplay += (s.vmids||[]).map(function(id){
         var n = vmNameMap[id];
         return vmBadge(id, n);
       }).join('');
       if (s.sync_vmids && !(s.vmids||[]).length) {
-        vmDisplay += '<span style="color:var(--muted);font-size:11px">wird beim ersten Run befüllt</span>';
+        vmDisplay += '<span style="color:var(--muted);font-size:11px">will be populated on first run</span>';
       }
       vmDisplay += '</div>';
       return '<tr>' +

@@ -136,7 +136,7 @@ class PluginPveSession:
         return self._session.post(url, json=data or {}, timeout=(10, 120))
 
     def get_node_status(self):
-        """{node_name: {ip, host}} für alle Nodes im Cluster."""
+        """{node_name: {ip, host}} for all nodes in the cluster."""
         r = self._api_get(f"{self._base}/nodes")
         if not r.ok:
             return {}

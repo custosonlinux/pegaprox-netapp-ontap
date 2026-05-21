@@ -98,7 +98,7 @@ def snapmanifest_initialize(ssh_host, ssh_user, ssh_pass, ssh_key,
         log.info(f"[netapp_storage] snapmanifest LV {vg_name}/{lv_name} already exists")
         return True
 
-    # Freien Platz prüfen
+    # Check free space
     free_out = ssh_run(
         ssh_host, ssh_user, ssh_pass,
         f"vgs --noheadings --units m --nosuffix -o vg_free {vg_q} 2>/dev/null",
