@@ -147,6 +147,7 @@ def _execute_schedule(schedule):
         "node": node,
         "vmids": vmids,
         "mapping_id": schedule["mapping_id"],
+        "pve_storage_id":    mapping_row["pve_storage_id"] if mapping_row else "",
         "consistency":       schedule.get("consistency", "crash"),
         "label":             schedule.get("label", ""),
         "pre_script":        schedule.get("pre_script",  "") or "",

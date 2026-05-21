@@ -138,7 +138,9 @@ def _run_snapshot(job_id, params, username):
             vm_types[str(vmid)] = vm_type
             result = mgr.get_vm_config(vm_node, vmid, vm_type)
             if not result.get("success"):
-                raise RuntimeError(f"Proxmox config for {vm_type.upper()} {vmid} not available: {result.get('error')}")
+                jlog.log(f"WARNING: {vm_type.upper()} {vmid} not found — skipping "
+                         f"(migrated or deleted?): {result.get('error', '')}")
+                continue
             cfg_raw = result["config"].get("raw", {})
             disks = _extract_disk_files(cfg_raw, mapping["pve_storage_id"], vm_type)
             vm_entries.append({
@@ -150,6 +152,13 @@ def _run_snapshot(job_id, params, username):
                 "_raw_conf": cfg_raw,
                 "_node": vm_node,
             })
+
+        if not vm_entries:
+            jlog.log("WARNING: No VMs could be processed — all VMs in this schedule are "
+                     "missing from Proxmox (migrated or deleted). Snapshot will still be "
+                     "created but the manifest will be empty. Please update the schedule.")
+        else:
+            jlog.log(f"{len(vm_entries)} VM(s) ready for snapshot.")
 
         # ── 2. Build manifest ──────────────────────────────────────────
         manifest = {
@@ -402,6 +411,7 @@ def _run_snapshot(job_id, params, username):
                     notify_on=params.get("notify_on", "all"),
                     log_lines=log_entries,
                     vm_list=vm_list,
+                    datastore=params.get("pve_storage_id", ""),
                 )
             except Exception as ne:
                 log.warning(f"[netapp_storage] Notification failed for job {job_id}: {ne}")

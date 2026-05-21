@@ -153,7 +153,7 @@ def _log_severity(msg):
 
 
 def _build_notification_email(subject, schedule_name, snap_name, job_status, log_lines=None,
-                               extra_rows=None, vm_list=None):
+                               extra_rows=None, vm_list=None, datastore=None):
     """
     Returns (html_body, plain_body).
 
@@ -199,8 +199,10 @@ def _build_notification_email(subject, schedule_name, snap_name, job_status, log
     summary_rows = [
         ("Schedule",  schedule_name),
         ("Snapshot",  snap_name),
+        ("Datastore", datastore) if datastore else None,
         ("Status",    f'<span style="color:{cfg["dot_color"]};font-weight:700">● {cfg["dot_label"]}</span>'),
     ]
+    summary_rows = [r for r in summary_rows if r is not None]
     if vm_list:
         def _vm_badge(vm):
             vmid = vm.get("vmid", "?")
@@ -290,10 +292,12 @@ def _build_notification_email(subject, schedule_name, snap_name, job_status, log
         subject,
         "=" * len(subject),
         "",
-        f"Schedule : {schedule_name}",
-        f"Snapshot : {snap_name}",
-        f"Status   : {status_label}",
+        f"Schedule  : {schedule_name}",
+        f"Snapshot  : {snap_name}",
     ]
+    if datastore:
+        plain_lines.append(f"Datastore : {datastore}")
+    plain_lines.append(f"Status    : {status_label}")
     if vm_list:
         vm_labels = [
             f"{(v.get('vm_type') or 'qemu').upper()} {v.get('vmid','?')}"
@@ -311,7 +315,7 @@ def _build_notification_email(subject, schedule_name, snap_name, job_status, log
 
 
 def send_job_notification(schedule_name, job_status, snap_name,
-                          recipients_csv, notify_on, log_lines=None, vm_list=None):
+                          recipients_csv, notify_on, log_lines=None, vm_list=None, datastore=None):
     """Send a snapshot job result notification email.
 
     Called from the snapshot engine after a scheduled job finishes.
@@ -344,7 +348,8 @@ def send_job_notification(schedule_name, job_status, snap_name,
         subject    = f"[PegaProx] Snapshot {status_str}: {schedule_name} — {snap_name}"
 
         html_body, plain_body = _build_notification_email(
-            subject, schedule_name, snap_name, job_status, log_lines, vm_list=vm_list)
+            subject, schedule_name, snap_name, job_status, log_lines,
+            vm_list=vm_list, datastore=datastore)
 
         recipients = [r.strip() for r in recipients_csv.split(',') if r.strip()]
         msg = email.mime.multipart.MIMEMultipart('alternative')
@@ -423,6 +428,7 @@ def _notify_test():
     html_body, plain_body = _build_notification_email(
         subject, "— test —", "— test —", "done", fake_log,
         extra_rows=[("Sent", now_str)], vm_list=fake_vms,
+        datastore="nfs-prod-01",
     )
     msg = email.mime.multipart.MIMEMultipart('alternative')
     msg['From']    = from_addr
