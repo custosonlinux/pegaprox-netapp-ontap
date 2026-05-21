@@ -4422,13 +4422,15 @@ function showResizeDialog(dsId, dsName, currentBytes, protocol) {
   box.style.cssText='background:var(--card);border:1px solid var(--border);border-radius:8px;padding:24px;min-width:320px;max-width:420px';
   var unitOpts='<option value="GiB">GiB</option><option value="TiB">TiB</option><option value="MiB">MiB</option>';
   var shrinkNote=protocol==='nfs'?'<p style="font-size:11px;color:var(--muted);margin-top:4px">Shrink is only supported for NFS volumes.</p>':'';
+  var sanHint=protocol!=='nfs'?'<div id="resizeDlgVolHint" class="hint" style="margin-top:4px"></div>':'';
   box.innerHTML=
     '<div style="font-weight:600;margin-bottom:12px">Resize "'+esc(dsName)+'"</div>'+
     '<p style="font-size:12px;color:var(--muted);margin-bottom:12px">Current size: '+fmtBytes(currentBytes)+'</p>'+
-    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">'+
+    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">'+
       '<input type="number" id="resizeDlgSize" min="1" value="'+(Math.ceil(currentBytes/1073741824))+'" style="width:90px;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">'+
       '<select id="resizeDlgUnit" style="padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">'+unitOpts+'</select>'+
     '</div>'+
+    sanHint+
     shrinkNote+
     '<div style="display:flex;gap:8px;margin-top:16px">'+
       '<button class="btn btn-primary" id="resizeDlgOk">Resize</button>'+
@@ -4437,6 +4439,13 @@ function showResizeDialog(dsId, dsName, currentBytes, protocol) {
     '</div>';
   overlay.appendChild(box);
   document.body.appendChild(overlay);
+  if(protocol!=='nfs'){
+    var sanLabel=protocol==='nvme'?'namespace':'LUN';
+    var _upd=function(){ provWizUpdateSanVolHint('resizeDlgSize','resizeDlgUnit','resizeDlgVolHint',sanLabel); };
+    document.getElementById('resizeDlgSize').addEventListener('input',_upd);
+    document.getElementById('resizeDlgUnit').addEventListener('change',_upd);
+    _upd();
+  }
   document.getElementById('resizeDlgCancel').onclick=function(){ document.body.removeChild(overlay); };
   document.getElementById('resizeDlgOk').onclick=async function(){
     var sz=parseInt(document.getElementById('resizeDlgSize').value)||0;
