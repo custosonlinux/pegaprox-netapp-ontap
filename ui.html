@@ -1784,13 +1784,17 @@ function applyI18n() {
                 <input class="form-control" id="provWizLunName" placeholder="e.g. proxmox-lun-01">
               </div>
               <div class="form-group">
-                <label>Size</label>
+                <label>LUN Size</label>
                 <div style="display:flex;gap:6px">
-                  <input class="form-control" id="provWizLunSize" type="number" min="1" value="100" style="width:90px">
-                  <select class="form-control" id="provWizLunSizeUnit" style="width:80px">
+                  <input class="form-control" id="provWizLunSize" type="number" min="1" value="100" style="width:90px"
+                         oninput="provWizUpdateSanVolHint('provWizLunSize','provWizLunSizeUnit','provWizLunVolHint','LUN')"
+                         onchange="provWizUpdateSanVolHint('provWizLunSize','provWizLunSizeUnit','provWizLunVolHint','LUN')">
+                  <select class="form-control" id="provWizLunSizeUnit" style="width:80px"
+                          onchange="provWizUpdateSanVolHint('provWizLunSize','provWizLunSizeUnit','provWizLunVolHint','LUN')">
                     <option value="GiB">GiB</option><option value="TiB">TiB</option><option value="MiB">MiB</option>
                   </select>
                 </div>
+                <div id="provWizLunVolHint" class="hint" style="margin-top:4px"></div>
               </div>
               <div class="form-group">
                 <label>iGroup</label>
@@ -1821,13 +1825,17 @@ function applyI18n() {
                 <input class="form-control" id="provWizNsName" placeholder="e.g. proxmox-ns-01">
               </div>
               <div class="form-group">
-                <label>Size</label>
+                <label>Namespace Size</label>
                 <div style="display:flex;gap:6px">
-                  <input class="form-control" id="provWizNsSize" type="number" min="1" value="100" style="width:90px">
-                  <select class="form-control" id="provWizNsSizeUnit" style="width:80px">
+                  <input class="form-control" id="provWizNsSize" type="number" min="1" value="100" style="width:90px"
+                         oninput="provWizUpdateSanVolHint('provWizNsSize','provWizNsSizeUnit','provWizNsVolHint','namespace')"
+                         onchange="provWizUpdateSanVolHint('provWizNsSize','provWizNsSizeUnit','provWizNsVolHint','namespace')">
+                  <select class="form-control" id="provWizNsSizeUnit" style="width:80px"
+                          onchange="provWizUpdateSanVolHint('provWizNsSize','provWizNsSizeUnit','provWizNsVolHint','namespace')">
                     <option value="GiB">GiB</option><option value="TiB">TiB</option><option value="MiB">MiB</option>
                   </select>
                 </div>
+                <div id="provWizNsVolHint" class="hint" style="margin-top:4px"></div>
               </div>
               <div class="form-group">
                 <label>NVMe Subsystem</label>
@@ -4101,6 +4109,8 @@ function showProvWizard() {
   var lsz=document.getElementById('provWizLunSize'); if(lsz) lsz.value='100';
   var nsz=document.getElementById('provWizNsSize');  if(nsz) nsz.value='100';
   var fsz=document.getElementById('provWizNfsSize');  if(fsz) fsz.value='500';
+  provWizUpdateSanVolHint('provWizLunSize','provWizLunSizeUnit','provWizLunVolHint','LUN');
+  provWizUpdateSanVolHint('provWizNsSize','provWizNsSizeUnit','provWizNsVolHint','namespace');
   document.getElementById('provOntapLoadErr').textContent='';
   var r=document.querySelector('input[name="provProto"][value="iscsi"]');
   if(r) r.checked=true;
@@ -4271,6 +4281,18 @@ function provWizNsChange() {
 function provWizSubsystemChange() {
   var isNew=document.getElementById('provWizSubsystem').value==='__new__';
   document.getElementById('provWizNewSubsystemRow').style.display=isNew?'':'none';
+}
+
+function provWizUpdateSanVolHint(sizeId, unitId, hintId, label) {
+  var UNITS={'GiB':1073741824,'TiB':1099511627776,'MiB':1048576};
+  var SAN_VOL_MULTIPLIER=2.5;
+  var hint=document.getElementById(hintId);
+  if(!hint) return;
+  var sz=parseFloat(document.getElementById(sizeId).value)||0;
+  var unit=document.getElementById(unitId).value;
+  if(!sz||!UNITS[unit]){ hint.textContent=''; return; }
+  var volBytes=sz*UNITS[unit]*SAN_VOL_MULTIPLIER;
+  hint.textContent='ONTAP volume: ~'+fmtBytes(volBytes)+' ('+SAN_VOL_MULTIPLIER+'× '+label+' size — headroom for snapshots)';
 }
 
 async function provWizNext2() {
