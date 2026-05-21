@@ -363,6 +363,26 @@ The **Provisioning** tab automates the complete setup of a new datastore — fro
 4. **All hosts** — `pvscan --cache -aay` VG activation.
 5. **PVE cluster** — `pvesm add lvm / lvmthin` (cluster-wide, run once).
 
+### Resize datastore
+
+Resize runs as a background job and is non-disruptive for VMs that are running.
+
+**NFS — grow or shrink:**
+1. ONTAP volume is resized to the new size.
+2. No host-side action needed — the NFS client sees the updated size immediately through the existing mount.
+
+**iSCSI — grow only:**
+1. ONTAP volume is resized to `new_size × 1.10` (10 % headroom for WAFL metadata and overwrite reserve; costs no physical space on thin-provisioned volumes).
+2. LUN is resized to `new_size`.
+3. Per PVE host — SCSI bus rescan (`/sys/class/scsi_device/*/device/rescan`, `udevadm settle`), `multipath` table reload, `multipathd resize map`, `pvresize` on the multipath device, `pvscan --cache`.
+
+**NVMe-oF — grow only:**
+1. ONTAP volume is resized to `new_size × 1.10`.
+2. NVMe namespace is resized to `new_size`.
+3. Per PVE host — NVMe namespace rescan, `pvresize` on each PV belonging to the VG, `pvscan --cache`.
+
+After a SAN resize, `pvresize` makes the extra space available to LVM. To expose it to VMs, extend the desired LV (`lvextend`) and resize the filesystem inside the VM afterwards.
+
 ### Remove datastore
 
 The Provisioning tab also handles teardown: `pvesm remove`, VG deactivation and removal, iSCSI logout / NVMe disconnect — and optionally deletes the ONTAP LUN/namespace and volume.
