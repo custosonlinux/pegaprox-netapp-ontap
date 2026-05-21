@@ -372,14 +372,16 @@ Resize runs as a background job and is non-disruptive for VMs that are running.
 2. No host-side action needed — the NFS client sees the updated size immediately through the existing mount.
 
 **iSCSI — grow only:**
-1. ONTAP volume is resized to `new_size × 1.10` (10 % headroom for WAFL metadata and overwrite reserve; costs no physical space on thin-provisioned volumes).
+1. ONTAP volume is resized to `new_size × san_volume_multiplier` (default 2.5×, configurable in `config.json`). The extra headroom accommodates ONTAP snapshots taken after the resize. Costs no physical space on thin-provisioned volumes.
 2. LUN is resized to `new_size`.
 3. Per PVE host — SCSI bus rescan (`/sys/class/scsi_device/*/device/rescan`, `udevadm settle`), `multipath` table reload, `multipathd resize map`, `pvresize` on the multipath device, `pvscan --cache`.
 
 **NVMe-oF — grow only:**
-1. ONTAP volume is resized to `new_size × 1.10`.
+1. ONTAP volume is resized to `new_size × san_volume_multiplier` (default 2.5×, same as iSCSI).
 2. NVMe namespace is resized to `new_size`.
 3. Per PVE host — NVMe namespace rescan, `pvresize` on each PV belonging to the VG, `pvscan --cache`.
+
+The `san_volume_multiplier` (default `2.5`) applies to both initial provisioning and resize. On thin-provisioned volumes the extra ONTAP volume capacity is not physically allocated until written, so the overhead is free until snapshots consume it.
 
 After a SAN resize, `pvresize` makes the extra space available to LVM. To expose it to VMs, extend the desired LV (`lvextend`) and resize the filesystem inside the VM afterwards.
 
@@ -559,6 +561,7 @@ See `config.example.json` for all options:
 | `job_poll_timeout_s` | `300` | Max wait time for an ONTAP job (seconds) |
 | `manifest_subdir` | `".netapp-snapmanifest"` | Directory inside the NFS mount for manifests |
 | `flexclone_mount_base` | `"/mnt/pegaprox-clone"` | Temp mount point for FlexClone restores |
+| `san_volume_multiplier` | `2.5` | ONTAP volume size = LUN/namespace size × this factor. Leaves headroom for snapshots. Applies to iSCSI and NVMe-oF provisioning and resize. |
 
 ---
 

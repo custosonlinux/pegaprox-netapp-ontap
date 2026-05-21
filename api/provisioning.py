@@ -17,7 +17,7 @@ from pegaprox.core.db import get_db
 
 from ..core._helpers import (
     get_endpoint, build_ontap_client, build_pve_client,
-    get_ssh_creds, JobLogger, ssh_run,
+    get_ssh_creds, JobLogger, ssh_run, load_plugin_config,
 )
 from ..core.ontap_client import OntapError
 from ..core.san_helpers import (
@@ -642,12 +642,17 @@ def _provision_iscsi(ds_id, params, db, jlog):
     volume_uuid = params.get("volume_uuid", "")
     volume_name = _ontap_safe_name(params.get("volume_name", ""))
 
+    _cfg = load_plugin_config()
+    _vol_multiplier = float(_cfg.get("san_volume_multiplier", 2.5))
+    vol_size_bytes = int(size_bytes * _vol_multiplier)
+
     asa_mode = False
     if not volume_uuid:
         ag_info = f" on aggregate '{aggregate_name}'" if aggregate_name else " (auto-placement)"
-        jlog.log(f"Creating ONTAP volume '{volume_name}' ({size_bytes} bytes){ag_info} …")
+        jlog.log(f"Creating ONTAP volume '{volume_name}' ({vol_size_bytes} bytes, "
+                 f"{_vol_multiplier}× LUN size){ag_info} …")
         try:
-            volume_uuid = client.create_volume_san(svm_name, volume_name, size_bytes, aggregate_name=aggregate_name)
+            volume_uuid = client.create_volume_san(svm_name, volume_name, vol_size_bytes, aggregate_name=aggregate_name)
             jlog.log(f"Volume created: {volume_uuid}")
             try:
                 client.enable_inline_compression(volume_uuid)
@@ -939,11 +944,11 @@ def _run_resize(job_id, ds_id, new_size_bytes, username):
         client   = build_ontap_client(endpoint)
         vol_uuid = ds.get("volume_uuid", "")
 
-        # The ONTAP volume must be larger than the LUN/namespace to leave room
-        # for metadata, overwrite reserve, and WAFL overhead.  10 % overhead
-        # is sufficient; on thin-provisioned volumes this costs no physical
-        # space.
-        _SAN_VOL_SIZE = int(new_size_bytes * 1.10)
+        # The ONTAP volume must be substantially larger than the LUN/namespace
+        # to leave headroom for snapshots.  Default multiplier is 2.5×
+        # (configurable via san_volume_multiplier in config.json).
+        _vol_multiplier = float(load_plugin_config().get("san_volume_multiplier", 2.5))
+        _SAN_VOL_SIZE = int(new_size_bytes * _vol_multiplier)
 
         if protocol == "nfs":
             # NFS: only ONTAP resize needed (PVE mounts adjust automatically)
@@ -1520,12 +1525,17 @@ def _provision_nvme(ds_id, params, db, jlog):
     # ── ONTAP: Volume ────────────────────────────────────────────────────────
     volume_uuid = params.get("volume_uuid", "")
     volume_name = _ontap_safe_name(params.get("volume_name", ""))
+    _cfg = load_plugin_config()
+    _vol_multiplier = float(_cfg.get("san_volume_multiplier", 2.5))
+    vol_size_bytes = int(size_bytes * _vol_multiplier)
+
     asa_mode = False
     if not volume_uuid:
         ag_info = f" on aggregate '{aggregate_name}'" if aggregate_name else " (auto-placement)"
-        jlog.log(f"Creating ONTAP volume '{volume_name}' ({size_bytes} bytes){ag_info} …")
+        jlog.log(f"Creating ONTAP volume '{volume_name}' ({vol_size_bytes} bytes, "
+                 f"{_vol_multiplier}× namespace size){ag_info} …")
         try:
-            volume_uuid = client.create_volume_san(svm_name, volume_name, size_bytes,
+            volume_uuid = client.create_volume_san(svm_name, volume_name, vol_size_bytes,
                                                    aggregate_name=aggregate_name)
             jlog.log(f"Volume created: {volume_uuid}")
             try:
