@@ -1574,6 +1574,13 @@ def _provision_nvme(ds_id, params, db, jlog):
                         jlog.log(f"Auto-provisioned volume (by name): {volume_name} ({volume_uuid})")
                 except Exception as exc2:
                     jlog.log(f"WARNING: could not resolve auto-provisioned volume: {exc2}")
+        # ASA auto-created volume — apply snapshot/ARP settings now
+        if volume_uuid:
+            try:
+                client.disable_volume_snapshots_and_arp(volume_uuid)
+                jlog.log("Snapshot policy and ARP disabled on ASA volume.")
+            except Exception as exc:
+                jlog.log(f"WARNING: could not apply volume policies: {exc}")
     else:
         jlog.log(f"Using existing namespace: {ns_uuid}")
 

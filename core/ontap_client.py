@@ -752,7 +752,25 @@ class OntapClient:
                     break
         if not vol_uuid:
             raise OntapError(f"Volume '{vol_name}' not found after creation")
+        self.disable_volume_snapshots_and_arp(vol_uuid)
         return vol_uuid
+
+    def disable_volume_snapshots_and_arp(self, vol_uuid):
+        """Disable scheduled snapshots and Anti-Ransomware Protection on a volume.
+
+        Called after provisioning to ensure no automatic ONTAP snapshots are created.
+        ARP disable is best-effort — silently ignored if ARP is not installed or the
+        ONTAP version does not support it.
+        """
+        self._patch(f"storage/volumes/{vol_uuid}", body={
+            "snapshot_policy": {"name": "none"},
+            "space": {"snapshot": {"reserve_percent": 0}},
+        })
+        try:
+            self._patch(f"storage/volumes/{vol_uuid}",
+                        body={"anti_ransomware": {"state": "disabled"}})
+        except Exception:
+            pass
 
     def enable_inline_compression(self, vol_uuid):
         """Enable inline compression on a volume (needed for FAS; AFF/ASA enable it by default).
@@ -1810,6 +1828,7 @@ class OntapClient:
                     break
         if not vol_uuid:
             raise OntapError(f"NFS volume '{vol_name}' not found after creation")
+        self.disable_volume_snapshots_and_arp(vol_uuid)
         return vol_uuid
 
     def create_export_policy(self, svm_name, policy_name):
