@@ -28,7 +28,7 @@ All operations run as background jobs with live log streaming. Every snapshot em
 | Scheduled Snapshots | ✅ | ✅ | ✅ |
 | Email notifications per schedule | ✅ | ✅ | ✅ |
 | Manifest (VM inventory, disk layout, configs) rides inside ONTAP snapshot | ✅ | ✅ | ✅ |
-| Restore — SFSR (Single-File, NFS only) | ✅ | ❌ n/a | ❌ n/a |
+| Restore — SFSR (Singe File (VM Disk) Storage Restore, NFS only) | ✅ | ❌ n/a | ❌ n/a |
 | Restore — Single VM (LV-copy via temp clone) | ❌ n/a | 🟡 Beta | 🟡 Beta¹ |
 | Restore — Volume Revert (all VMs) | ✅ | 🟡 Beta | 🟡 Beta |
 | VM Clone from snapshot | ✅ | 🟡 Beta | 🟡 Beta¹ |
